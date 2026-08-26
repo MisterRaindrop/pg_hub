@@ -4,7 +4,8 @@
 #
 # Usage: run-test.sh TEST
 # Env:   TOP_BUILDDIR, PG_CONFIG, MICROBENCH_PORT (default 55432),
-#        MICROBENCH_N (default 128), MICROBENCH_ROUNDS (default 1000)
+#        MICROBENCH_ROUNDS (default 1000),
+#        MICROBENCH_ITERATIONS or MICROBENCH_N (default 128)
 #
 set -euo pipefail
 
@@ -16,8 +17,8 @@ TOP_BUILDDIR=${TOP_BUILDDIR:-$(cd "$MODULE_DIR/../../../.." && pwd)}
 PORT=${MICROBENCH_PORT:-55432}
 LOGDIR="$MODULE_DIR/.tmp_check/log"
 DATADIR="$MODULE_DIR/.tmp_check/data"
-N=${MICROBENCH_N:-128}
 ROUNDS=${MICROBENCH_ROUNDS:-1000}
+ITERATIONS=${MICROBENCH_ITERATIONS:-${MICROBENCH_N:-128}}
 
 log() { printf '%s\n' "$*" >&2; }
 
@@ -107,14 +108,14 @@ trap cleanup EXIT
 if ! "$BINDIR/pg_ctl" -D "$DATADIR" status >/dev/null 2>&1; then
 	log "==> starting postgres on port $PORT..."
 	if ! "$BINDIR/pg_ctl" -D "$DATADIR" -l "$LOGDIR/postgres.log" \
-		-o "-p $PORT -F -h '' -c shared_buffers=128MB" start \
+		-o "-p $PORT -F -h '' -c shared_buffers=128MB -c max_worker_processes=256 -c max_parallel_workers=256" start \
 		>>"$LOGDIR/pg_ctl.log" 2>&1; then
 		if grep -q 'incompatible with server' "$LOGDIR/postgres.log"; then
 			log "==> postgres rejected datadir; re-initdb..."
 			rm -rf "$DATADIR"
 			ensure_datadir
 			"$BINDIR/pg_ctl" -D "$DATADIR" -l "$LOGDIR/postgres.log" \
-				-o "-p $PORT -F -h '' -c shared_buffers=128MB" start \
+				-o "-p $PORT -F -h '' -c shared_buffers=128MB -c max_worker_processes=256 -c max_parallel_workers=256" start \
 				>>"$LOGDIR/pg_ctl.log" 2>&1
 		else
 			log "pg_ctl start failed; see $LOGDIR/postgres.log and $LOGDIR/pg_ctl.log"
@@ -129,7 +130,7 @@ log "==> CREATE EXTENSION microbench"
 	-c "DROP EXTENSION IF EXISTS microbench CASCADE; CREATE EXTENSION microbench;" \
 	>>"$LOGDIR/psql.log" 2>&1
 
-log "==> running $TEST/query.sql (n=$N rounds=$ROUNDS)"
+log "==> running $TEST/query.sql (rounds=$ROUNDS iterations=$ITERATIONS)"
 "$BINDIR/psql" -v ON_ERROR_STOP=1 -p "$PORT" -d postgres \
-	-v n="$N" -v rounds="$ROUNDS" \
+	-v rounds="$ROUNDS" -v iterations="$ITERATIONS" \
 	-f "$MODULE_DIR/$TEST/query.sql"

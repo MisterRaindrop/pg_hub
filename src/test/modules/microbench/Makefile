@@ -14,6 +14,7 @@ MICROBENCH_SQL_BUILT = microbench--1.0.sql
 
 OBJS = \
 	$(WIN32RES) \
+	multiprocessing.o \
 	$(addsuffix /bench.o,$(MICROBENCH_TESTS))
 
 # Generated extension script; must be DATA_built so all/install depend on it.
@@ -43,7 +44,7 @@ $(MICROBENCH_SQL_BUILT): $(addprefix $(srcdir)/,$(MICROBENCH_SQL_HEAD)) \
 # Incremental compile of a single benchmark folder, e.g. make lwlock
 $(MICROBENCH_TESTS): %: %/bench.o
 
-%/bench.o: %/bench.c randomize.h timing-magic.h
+%/bench.o: %/bench.c randomize.h timing-magic.h multiprocessing.h
 	$(COMPILE.c) -I. -o $@ $<
 
 .PHONY: run tests list $(MICROBENCH_TESTS)

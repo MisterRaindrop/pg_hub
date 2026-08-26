@@ -5,6 +5,8 @@ microbench_tests = [
 ]
 
 microbench_sources = files(
+  'multiprocessing.c',
+) + files(
   '@0@/bench.c'.format(test) for test in microbench_tests
 )
 
