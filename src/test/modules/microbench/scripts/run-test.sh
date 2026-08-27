@@ -4,8 +4,7 @@
 #
 # Usage: run-test.sh TEST
 # Env:   TOP_BUILDDIR, PG_CONFIG, MICROBENCH_PORT (default 55432),
-#        MICROBENCH_ROUNDS (default 1000),
-#        MICROBENCH_ITERATIONS or MICROBENCH_N (default 128)
+#        MICROBENCH_PARAMS
 #
 set -euo pipefail
 
@@ -18,8 +17,7 @@ PORT=${MICROBENCH_PORT:-55432}
 LOGDIR="$MODULE_DIR/.tmp_check/log"
 DATADIR="$MODULE_DIR/.tmp_check/data"
 ROUNDS=${MICROBENCH_ROUNDS:-1000}
-ITERATIONS=${MICROBENCH_ITERATIONS:-${MICROBENCH_N:-128}}
-
+MICROBENCH_PARAMS=${MIBROBENCH_PARAMS:""}
 log() { printf '%s\n' "$*" >&2; }
 
 test -f "$MODULE_DIR/$TEST/query.sql" || {
@@ -130,7 +128,7 @@ log "==> CREATE EXTENSION microbench"
 	-c "DROP EXTENSION IF EXISTS microbench CASCADE; CREATE EXTENSION microbench;" \
 	>>"$LOGDIR/psql.log" 2>&1
 
-log "==> running $TEST/query.sql (rounds=$ROUNDS iterations=$ITERATIONS)"
+log "==> running $TEST/query.sql"
 "$BINDIR/psql" -v ON_ERROR_STOP=1 -p "$PORT" -d postgres \
-	-v rounds="$ROUNDS" -v iterations="$ITERATIONS" \
+	$MICROBENCH_PARAMS \
 	-f "$MODULE_DIR/$TEST/query.sql"
