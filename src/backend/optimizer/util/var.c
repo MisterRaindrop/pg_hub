@@ -932,12 +932,30 @@ flatten_join_alias_vars_mutator(Node *node,
 	}
 	if (IsA(node, PlaceHolderVar))
 	{
-		/* Copy the PlaceHolderVar node with correct mutation of subnodes */
-		PlaceHolderVar *phv;
+		PlaceHolderVar *phv = (PlaceHolderVar *) node;
 
-		phv = (PlaceHolderVar *) expression_tree_mutator(node,
-														 flatten_join_alias_vars_mutator,
-														 context);
+		/*
+		 * Don't recurse into a PHV of an outer query level: its expression is
+		 * already preprocessed by that level and may contain SubPlans, and it
+		 * holds no join aliases of the target level anyway.  A PHV above the
+		 * target level needs nothing fixed, so return it as-is; a pushed-down
+		 * copy still needs its relid sets fixed below, so shallow-copy it
+		 * instead of recursing.
+		 */
+		if (phv->phlevelsup > context->sublevels_up)
+			return node;		/* no need to copy, really */
+
+		if (phv->phlevelsup > 0)
+		{
+			PlaceHolderVar *newphv = makeNode(PlaceHolderVar);
+
+			memcpy(newphv, phv, sizeof(PlaceHolderVar));
+			phv = newphv;
+		}
+		else
+			phv = (PlaceHolderVar *) expression_tree_mutator(node,
+															 flatten_join_alias_vars_mutator,
+															 context);
 		/* now fix PlaceHolderVar's relid sets */
 		if (phv->phlevelsup == context->sublevels_up)
 		{
