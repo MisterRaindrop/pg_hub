@@ -783,6 +783,33 @@ my %tests = (
 		unlike => { no_privs => 1, },
 	},
 
+	# The backend keeps a pg_default_acl entry's ACL array in grantee-OID order
+	# (ExecGrant_Default_Acl canonicalizes it with aclitemsort()), so emitting
+	# the GRANTs in array order would make the dump depend on the order the
+	# grantee roles happened to be created in.  Two databases with the same
+	# default privileges must dump alike, and a dump/restore round trip must be
+	# order-stable even though the restore assigns new role OIDs.  Create these
+	# roles in the reverse of their name order and require name order out.
+	'ALTER DEFAULT PRIVILEGES grantees are dumped in name order' => {
+		create_order => 57,
+		create_sql => 'CREATE ROLE regress_dump_defacl_zzz;
+					   CREATE ROLE regress_dump_defacl_aaa;
+					   ALTER DEFAULT PRIVILEGES
+					   FOR ROLE regress_dump_test_role
+					   GRANT SELECT ON SEQUENCES
+					   TO regress_dump_defacl_zzz, regress_dump_defacl_aaa;',
+		regexp => qr/^
+			\QALTER DEFAULT PRIVILEGES \E
+			\QFOR ROLE regress_dump_test_role \E
+			\QGRANT SELECT ON SEQUENCES TO regress_dump_defacl_aaa;\E\n
+			\QALTER DEFAULT PRIVILEGES \E
+			\QFOR ROLE regress_dump_test_role \E
+			\QGRANT SELECT ON SEQUENCES TO regress_dump_defacl_zzz;\E
+			/xm,
+		like => { %full_runs, section_post_data => 1, },
+		unlike => { no_privs => 1, },
+	},
+
 	'ALTER DEFAULT PRIVILEGES FOR ROLE regress_dump_test_role REVOKE SELECT'
 	  => {
 		create_order => 56,
@@ -813,6 +840,31 @@ my %tests = (
 			pg_dumpall_globals_clean => 1,
 			pg_dumpall_exclude => 1,
 		},
+	},
+
+	# dumpDatabaseConfig() must emit these in role name order.  The roles are
+	# created in the reverse of that order, and the ALTER ROLE statements are
+	# issued in the reverse of that order too, so neither pg_authid OID order
+	# nor pg_db_role_setting heap order can produce the expected output by
+	# accident; only an explicit sort on rolname can.
+	'ALTER ROLE ... IN DATABASE postgres SET, in role name order' => {
+		create_order => 28,
+		create_sql => '
+			CREATE ROLE regress_dump_role_z;
+			CREATE ROLE regress_dump_role_a;
+			ALTER ROLE regress_dump_role_z IN DATABASE postgres
+				SET work_mem = \'7MB\';
+			ALTER ROLE regress_dump_role_a IN DATABASE postgres
+				SET work_mem = \'6MB\';',
+		regexp => qr/^
+			\QALTER ROLE regress_dump_role_a IN DATABASE postgres SET work_mem TO '6MB';\E\n
+			\QALTER ROLE regress_dump_role_z IN DATABASE postgres SET work_mem TO '7MB';\E
+			/xm,
+
+		# These commands live in the DATABASE PROPERTIES entry, which only
+		# --create emits.  pg_dumpall passes --create for other databases, but
+		# not for "postgres" unless --clean is given too.
+		like => { createdb => 1, },
 	},
 
 	'ALTER COLLATION test0 OWNER TO' => {
@@ -884,10 +936,10 @@ my %tests = (
 			\QOPERATOR 4 >=(bigint,integer) ,\E\n\s+
 			\QOPERATOR 5 >(bigint,integer) ,\E\n\s+
 			\QFUNCTION 1 (integer, integer) btint4cmp(integer,integer) ,\E\n\s+
-			\QFUNCTION 2 (bigint, bigint) btint8sortsupport(internal) ,\E\n\s+
 			\QFUNCTION 2 (integer, integer) btint4sortsupport(internal) ,\E\n\s+
-			\QFUNCTION 4 (bigint, bigint) btequalimage(oid) ,\E\n\s+
-			\QFUNCTION 4 (integer, integer) btequalimage(oid);\E
+			\QFUNCTION 2 (bigint, bigint) btint8sortsupport(internal) ,\E\n\s+
+			\QFUNCTION 4 (integer, integer) btequalimage(oid) ,\E\n\s+
+			\QFUNCTION 4 (bigint, bigint) btequalimage(oid);\E
 			/xm,
 		like =>
 		  { %full_runs, %dump_test_schema_runs, section_pre_data => 1, },
@@ -2156,6 +2208,30 @@ my %tests = (
 		},
 	},
 
+	# pg_dumpall must emit tablespaces in name order, not in pg_tablespace.oid
+	# order.  These two are created in descending name order, so an OID-ordered
+	# dump emits _b before _a.
+	'CREATE TABLESPACE in name order' => {
+		create_order => 2,
+		create_sql => q(
+		    SET allow_in_place_tablespaces = on;
+			CREATE TABLESPACE regress_dump_tablespace_b
+			OWNER regress_dump_test_role LOCATION '';
+			CREATE TABLESPACE regress_dump_tablespace_a
+			OWNER regress_dump_test_role LOCATION ''),
+		regexp => qr/^
+			\QCREATE TABLESPACE regress_dump_tablespace_a OWNER regress_dump_test_role LOCATION '';\E
+			.*?
+			^\QCREATE TABLESPACE regress_dump_tablespace_b OWNER regress_dump_test_role LOCATION '';\E
+			/xms,
+		like => {
+			pg_dumpall_dbprivs => 1,
+			pg_dumpall_exclude => 1,
+			pg_dumpall_globals => 1,
+			pg_dumpall_globals_clean => 1,
+		},
+	},
+
 	'CREATE DATABASE regression_invalid...' => {
 		create_order => 1,
 		create_sql => q(
@@ -3172,6 +3248,79 @@ my %tests = (
 		},
 	},
 
+	# The "RLS is enabled" pseudo-object borrows its table's relname, so it
+	# ties in the sort with a policy of that same name on that same table.
+	# Check that the marker still dumps ahead of the policy.
+	'CREATE POLICY test_table ON test_table' => {
+		create_order => 27,
+		create_sql => 'CREATE POLICY test_table ON dump_test.test_table
+						   USING (true);',
+		regexp => qr/^
+			\QALTER TABLE dump_test.test_table ENABLE ROW LEVEL SECURITY;\E\n.+
+			\QCREATE POLICY test_table ON dump_test.test_table USING (true);\E
+			/xms,
+		like => {
+			%full_runs,
+			%dump_test_schema_runs,
+			only_dump_test_table => 1,
+			section_post_data => 1,
+		},
+		unlike => {
+			exclude_dump_test_schema => 1,
+			exclude_test_table => 1,
+			no_policies => 1,
+			no_policies_restore => 1,
+			only_dump_measurement => 1,
+		},
+	},
+
+	'CREATE POLICY p7 ON test_table with a multi-role TO list' => {
+		create_order => 28,
+		create_sql => 'CREATE ROLE regress_dump_policy_role_a;
+					   CREATE ROLE regress_dump_policy_role_b;
+					   CREATE POLICY p7 ON dump_test.test_table
+						   TO regress_dump_policy_role_b, regress_dump_policy_role_a
+						   USING (true);',
+		regexp => qr/^
+			\QCREATE POLICY p7 ON dump_test.test_table \E
+			\QTO regress_dump_policy_role_b, regress_dump_policy_role_a \E
+			\QUSING (true);\E
+			/xm,
+		like => {
+			%full_runs,
+			%dump_test_schema_runs,
+			only_dump_test_table => 1,
+			section_post_data => 1,
+		},
+		unlike => {
+			exclude_dump_test_schema => 1,
+			exclude_test_table => 1,
+			no_policies => 1,
+			no_policies_restore => 1,
+			only_dump_measurement => 1,
+		},
+	},
+
+	'CREATE ROLE regress_dump_policy_role_a' => {
+		regexp => qr/^CREATE ROLE regress_dump_policy_role_a;/m,
+		like => {
+			pg_dumpall_dbprivs => 1,
+			pg_dumpall_exclude => 1,
+			pg_dumpall_globals => 1,
+			pg_dumpall_globals_clean => 1,
+		},
+	},
+
+	'CREATE ROLE regress_dump_policy_role_b' => {
+		regexp => qr/^CREATE ROLE regress_dump_policy_role_b;/m,
+		like => {
+			pg_dumpall_dbprivs => 1,
+			pg_dumpall_exclude => 1,
+			pg_dumpall_globals => 1,
+			pg_dumpall_globals_clean => 1,
+		},
+	},
+
 	'CREATE PROPERTY GRAPH propgraph' => {
 		create_order => 20,
 		create_sql => 'CREATE PROPERTY GRAPH dump_test.propgraph;',
@@ -3268,7 +3417,7 @@ my %tests = (
 		create_sql =>
 		  'CREATE PUBLICATION pub9 FOR ALL TABLES EXCEPT (TABLE dump_test.test_table, dump_test.test_second_table);',
 		regexp => qr/^
-			\QCREATE PUBLICATION pub9 FOR ALL TABLES EXCEPT (TABLE ONLY dump_test.test_table, TABLE ONLY dump_test.test_second_table) WITH (publish = 'insert, update, delete, truncate');\E
+			\QCREATE PUBLICATION pub9 FOR ALL TABLES EXCEPT (TABLE ONLY dump_test.test_second_table, TABLE ONLY dump_test.test_table) WITH (publish = 'insert, update, delete, truncate');\E
 			/xm,
 		like => { %full_runs, section_post_data => 1, },
 	},
@@ -3278,7 +3427,7 @@ my %tests = (
 		create_sql =>
 		  'CREATE PUBLICATION pub10 FOR ALL TABLES EXCEPT (TABLE dump_test.test_inheritance_parent);',
 		regexp => qr/^
-			\QCREATE PUBLICATION pub10 FOR ALL TABLES EXCEPT (TABLE ONLY dump_test.test_inheritance_parent, TABLE ONLY dump_test.test_inheritance_child) WITH (publish = 'insert, update, delete, truncate');\E
+			\QCREATE PUBLICATION pub10 FOR ALL TABLES EXCEPT (TABLE ONLY dump_test.test_inheritance_child, TABLE ONLY dump_test.test_inheritance_parent) WITH (publish = 'insert, update, delete, truncate');\E
 			/xm,
 		like => { %full_runs, section_post_data => 1, },
 	},
@@ -4019,6 +4168,85 @@ my %tests = (
 			only_dump_measurement => 1,
 		},
 	},
+
+	# The order of a table's parents is a logical property of the database:
+	# pg_inherits.inhseqno fixes it, and it determines the order of the
+	# child's inherited columns.  Here inh_order_parent1 is re-attached after
+	# a NO INHERIT, so it has the *higher* inhseqno; VACUUM frees the line
+	# pointer of the removed pg_inherits row and the re-added one reuses it,
+	# putting the higher-inhseqno parent physically first.  The INHERITS list
+	# must still come out in inhseqno order.
+	'CREATE TABLE inh_order_parent1' => {
+		create_order => 101,
+		create_sql => 'CREATE TABLE dump_test.inh_order_parent1 (
+						   col1 int
+						 );',
+		regexp => qr/^
+		\QCREATE TABLE dump_test.inh_order_parent1 (\E\n
+		\s+\Qcol1 integer\E\n
+		\Q);\E\n
+		/xm,
+		like =>
+		  { %full_runs, %dump_test_schema_runs, section_pre_data => 1, },
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_measurement => 1,
+		},
+	},
+
+	'CREATE TABLE inh_order_parent2' => {
+		create_order => 102,
+		create_sql => 'CREATE TABLE dump_test.inh_order_parent2 (
+						   col1 int
+						 );',
+		regexp => qr/^
+		\QCREATE TABLE dump_test.inh_order_parent2 (\E\n
+		\s+\Qcol1 integer\E\n
+		\Q);\E\n
+		/xm,
+		like =>
+		  { %full_runs, %dump_test_schema_runs, section_pre_data => 1, },
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_measurement => 1,
+		},
+	},
+
+	'CREATE TABLE inh_order_child' => {
+		create_order => 103,
+		create_sql => 'CREATE TABLE dump_test.inh_order_child (
+						   col2 int
+						 ) INHERITS (dump_test.inh_order_parent1,
+									 dump_test.inh_order_parent2);
+					   ALTER TABLE dump_test.inh_order_child
+						   NO INHERIT dump_test.inh_order_parent1;
+					   VACUUM pg_catalog.pg_inherits;
+					   ALTER TABLE dump_test.inh_order_child
+						   INHERIT dump_test.inh_order_parent1;',
+		regexp => qr/^
+		\QCREATE TABLE dump_test.inh_order_child (\E\n
+		\s+\Qcol2 integer\E\n
+		\)\n
+		\QINHERITS (dump_test.inh_order_parent2, dump_test.inh_order_parent1);\E\n
+		/xm,
+		like => {
+			%full_runs, %dump_test_schema_runs, section_pre_data => 1,
+		},
+		unlike => {
+			binary_upgrade => 1,
+			exclude_dump_test_schema => 1,
+			only_dump_measurement => 1,
+		},
+	},
+
+	'CREATE TABLE inh_order_child pg_upgrade' => {
+		regexp => qr/^
+		\QALTER TABLE ONLY dump_test.inh_order_child INHERIT dump_test.inh_order_parent2;\E\n
+		\QALTER TABLE ONLY dump_test.inh_order_child INHERIT dump_test.inh_order_parent1;\E\n
+		/xm,
+		like => { binary_upgrade => 1, },
+	},
+
 
 	'CREATE STATISTICS extended_stats_no_options' => {
 		create_order => 97,

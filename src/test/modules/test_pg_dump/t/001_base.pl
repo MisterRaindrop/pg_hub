@@ -846,6 +846,51 @@ my %tests = (
 		},
 	},
 
+	'CREATE TRIGGER extdepend_trig' => {
+		create_order => 12,
+		create_sql =>
+		  'CREATE TRIGGER extdepend_trig BEFORE UPDATE ON regress_pg_dump_schema.extdependtab
+		FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger();
+		ALTER TRIGGER extdepend_trig ON regress_pg_dump_schema.extdependtab DEPENDS ON EXTENSION test_pg_dump;
+		ALTER TRIGGER extdepend_trig ON regress_pg_dump_schema.extdependtab DEPENDS ON EXTENSION plpgsql;',
+		regexp => qr/^
+		\QCREATE TRIGGER extdepend_trig BEFORE UPDATE ON regress_pg_dump_schema.extdependtab FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger();\E\n
+		/xms,
+		like => {%pgdump_runs},
+		unlike => {
+			data_only => 1,
+			extension_schema => 1,
+			pg_dumpall_globals => 1,
+			privileged_internals => 1,
+			section_data => 1,
+			section_pre_data => 1,
+			# Excludes this schema as extension is not listed.
+			without_extension_explicit_schema => 1,
+		},
+	},
+
+	# The two ALTER TRIGGER ... DEPENDS ON EXTENSION statements above are
+	# executed test_pg_dump first, plpgsql second, but pg_dump must emit them
+	# in extension name order, so that the archive entry's text does not
+	# depend on pg_depend's physical row order.
+	'ALTER TRIGGER DEPENDS ON extension in name order' => {
+		regexp => qr/^
+		\QALTER TRIGGER extdepend_trig ON regress_pg_dump_schema.extdependtab DEPENDS ON EXTENSION plpgsql;\E\n
+		\QALTER TRIGGER extdepend_trig ON regress_pg_dump_schema.extdependtab DEPENDS ON EXTENSION test_pg_dump;\E\n
+		/xms,
+		like => {%pgdump_runs},
+		unlike => {
+			data_only => 1,
+			extension_schema => 1,
+			pg_dumpall_globals => 1,
+			privileged_internals => 1,
+			section_data => 1,
+			section_pre_data => 1,
+			# Excludes this schema as extension is not listed.
+			without_extension_explicit_schema => 1,
+		},
+	},
+
 	# Objects not included in extension, part of schema created by extension
 	'CREATE TABLE regress_pg_dump_schema.external_tab' => {
 		create_order => 4,
