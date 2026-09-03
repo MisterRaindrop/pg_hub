@@ -1406,7 +1406,6 @@ ApplyLauncherMain(Datum main_arg)
 		if (MyReplicationSlot)
 		{
 			if (!retain_dead_tuples)
-				/* XXX unclear why we don't request logical decoding disable */
 				ReplicationSlotDropAcquired(false);
 			else if (can_update_xmin)
 				update_conflict_slot_xmin(xmin);
@@ -1564,6 +1563,11 @@ init_conflict_slot_xmin(void)
 /*
  * Create and acquire the replication slot used to retain information for
  * conflict detection, if not yet.
+ *
+ * The slot is necessarily physical: it is not tied to any database and no
+ * logical decoding is ever performed on it; only its xmin horizon is used to
+ * prevent the removal of dead tuples and commit timestamp data required
+ * by subscriptions with retain_dead_tuples enabled in any database.
  */
 void
 CreateConflictDetectionSlot(void)
