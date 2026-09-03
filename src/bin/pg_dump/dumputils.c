@@ -681,10 +681,16 @@ void
 buildShSecLabelQuery(const char *catalog_name, Oid objectId,
 					 PQExpBuffer sql)
 {
+	/*
+	 * Sort by provider, the remaining column of pg_shseclabel's unique key
+	 * (classoid and objoid are already fixed by the WHERE clause), so that
+	 * the emitted commands do not depend on physical row order.
+	 */
 	appendPQExpBuffer(sql,
 					  "SELECT provider, label FROM pg_catalog.pg_shseclabel "
 					  "WHERE classoid = 'pg_catalog.%s'::pg_catalog.regclass "
-					  "AND objoid = '%u'", catalog_name, objectId);
+					  "AND objoid = '%u' "
+					  "ORDER BY provider", catalog_name, objectId);
 }
 
 /*

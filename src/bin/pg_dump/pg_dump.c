@@ -3760,10 +3760,16 @@ dumpDatabaseConfig(Archive *AH, PQExpBuffer outbuf,
 
 	PQclear(res);
 
-	/* Now look for role-and-database-specific options */
+	/*
+	 * Now look for role-and-database-specific options.  Order by role name,
+	 * so that the emitted commands don't depend on the roles' OIDs; rolname
+	 * is a complete sort key, since pg_db_role_setting has at most one row
+	 * per (setdatabase, setrole).
+	 */
 	printfPQExpBuffer(buf, "SELECT rolname, unnest(setconfig) "
 					  "FROM pg_db_role_setting s, pg_roles r "
-					  "WHERE setrole = r.oid AND setdatabase = '%u'::oid",
+					  "WHERE setrole = r.oid AND setdatabase = '%u'::oid "
+					  "ORDER BY 1",
 					  dboid);
 
 	res = ExecuteSqlQuery(AH, buf->data, PGRES_TUPLES_OK);
@@ -4274,9 +4280,20 @@ getPolicies(Archive *fout, TableInfo tblinfo[], int numTables)
 	printfPQExpBuffer(query,
 					  "SELECT pol.oid, pol.tableoid, pol.polrelid, pol.polname, pol.polcmd, ");
 	appendPQExpBufferStr(query, "pol.polpermissive, ");
+	/*
+	 * The role names in the policy's TO clause must come out in the order
+	 * they appear in polroles, which is the order they were written in
+	 * CREATE POLICY.  An unordered ARRAY() subquery would instead return them
+	 * in pg_authid scan order, so two databases holding identical policies
+	 * would dump differently whenever their roles occupy different physical
+	 * positions or the planner picks a different scan for pg_authid.
+	 */
 	appendPQExpBuffer(query,
 					  "CASE WHEN pol.polroles = '{0}' THEN NULL ELSE "
-					  "   pg_catalog.array_to_string(ARRAY(SELECT pg_catalog.quote_ident(rolname) from pg_catalog.pg_roles WHERE oid = ANY(pol.polroles)), ', ') END AS polroles, "
+					  "   pg_catalog.array_to_string(ARRAY(SELECT pg_catalog.quote_ident(r.rolname) "
+					  "FROM pg_catalog.unnest(pol.polroles) WITH ORDINALITY AS u(roleoid, ord) "
+					  "JOIN pg_catalog.pg_roles r ON (r.oid = u.roleoid) "
+					  "ORDER BY u.ord), ', ') END AS polroles, "
 					  "pg_catalog.pg_get_expr(pol.polqual, pol.polrelid) AS polqual, "
 					  "pg_catalog.pg_get_expr(pol.polwithcheck, pol.polrelid) AS polwithcheck "
 					  "FROM unnest('%s'::pg_catalog.oid[]) AS src(tbloid)\n"
@@ -4595,10 +4612,22 @@ getPublications(Archive *fout)
 			PGresult   *res_tbls;
 
 			resetPQExpBuffer(query);
+			/*
+			 * Sort the EXCEPT list by the excluded relations' names.  The list
+			 * is a set, and pg_publication_rel has no ordering column, so an
+			 * unordered query would emit it in heap order and make two
+			 * logically-identical databases dump differently.  Sorting by
+			 * prrelid would just trade heap order for OID order; use the
+			 * referenced relation's natural key (nspname, relname), matching
+			 * DOTypeNameCompare().
+			 */
 			appendPQExpBuffer(query,
-							  "SELECT prrelid\n"
-							  "FROM pg_catalog.pg_publication_rel\n"
-							  "WHERE prpubid = %u AND prexcept",
+							  "SELECT pr.prrelid\n"
+							  "FROM pg_catalog.pg_publication_rel pr\n"
+							  "     JOIN pg_catalog.pg_class c ON c.oid = pr.prrelid\n"
+							  "     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace\n"
+							  "WHERE pr.prpubid = %u AND pr.prexcept\n"
+							  "ORDER BY n.nspname, c.relname",
 							  pubinfo[i].dobj.catId.oid);
 
 			res_tbls = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
@@ -5677,6 +5706,10 @@ dumpSubscription(Archive *fout, const SubscriptionInfo *subinfo)
 /*
  * Given a "create query", append as many ALTER ... DEPENDS ON EXTENSION as
  * the object needs.
+ *
+ * The statements are emitted in extension name order, so that the text of the
+ * object's archive entry is a function of the object's dependencies and not of
+ * the order in which those dependencies happen to appear in pg_depend.
  */
 static void
 append_depends_on_extension(Archive *fout,
@@ -5704,7 +5737,8 @@ append_depends_on_extension(Archive *fout,
 						  "FROM pg_catalog.pg_depend d, pg_catalog.pg_extension e "
 						  "WHERE d.refobjid = e.oid AND classid = '%s'::pg_catalog.regclass "
 						  "AND objid = '%u'::pg_catalog.oid AND deptype = 'x' "
-						  "AND refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass",
+						  "AND refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass "
+						  "ORDER BY e.extname",
 						  catalog,
 						  dobj->catId.oid);
 		res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
@@ -7692,8 +7726,18 @@ getInherits(Archive *fout, int *numInherits)
 	int			i_inhrelid;
 	int			i_inhparent;
 
-	/* find all the inheritance information */
-	appendPQExpBufferStr(query, "SELECT inhrelid, inhparent FROM pg_inherits");
+	/*
+	 * Find all the inheritance information.  ORDER BY inhseqno is essential:
+	 * the order of a table's parents is a logical property of the database
+	 * (inhseqno fixes the order of the child's inherited columns), while the
+	 * physical order of pg_inherits rows is not, since a line pointer freed
+	 * by NO INHERIT or DROP TABLE and then reclaimed by VACUUM gets reused by
+	 * a later entry with a higher inhseqno.  Sorting by inhrelid as well
+	 * makes the "same table as last time" caching in flagInhTables() work.
+	 */
+	appendPQExpBufferStr(query,
+						 "SELECT inhrelid, inhparent FROM pg_inherits "
+						 "ORDER BY inhrelid, inhseqno");
 
 	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
 
@@ -10567,12 +10611,26 @@ getDefaultACLs(Archive *fout)
 	 * for the case of 'S' (DEFACLOBJ_SEQUENCE) which must be converted to
 	 * 's'.
 	 */
+	/*
+	 * The stored element order of defaclacl carries no information: the
+	 * backend canonicalizes these arrays with aclitemsort(), which orders them
+	 * by grantee OID.  Dumping in that order would make our output depend on
+	 * OID assignment, so re-sort by the aclitem's textual form, i.e. by
+	 * grantee name.  Unlike an object's own ACL, a default ACL cannot contain
+	 * a chain of grants by different grantors -- every item's grantor is
+	 * defaclrole -- so reordering is safe here.
+	 */
 	appendPQExpBufferStr(query,
 						 "SELECT oid, tableoid, "
 						 "defaclrole, "
 						 "defaclnamespace, "
 						 "defaclobjtype, "
-						 "defaclacl, "
+						 "CASE WHEN pg_catalog.array_length(defaclacl, 1) IS NULL "
+						 "THEN defaclacl ELSE "
+						 "(SELECT pg_catalog.array_agg(a ORDER BY "
+						 "a::pg_catalog.text COLLATE pg_catalog.\"C\") "
+						 "FROM pg_catalog.unnest(defaclacl) AS a) "
+						 "END AS defaclacl, "
 						 "CASE WHEN defaclnamespace = 0 THEN "
 						 "acldefault(CASE WHEN defaclobjtype = 'S' "
 						 "THEN 's'::\"char\" ELSE defaclobjtype END, "
@@ -11949,6 +12007,7 @@ dumpExtension(Archive *fout, const ExtensionInfo *extinfo)
 		 */
 		int			i;
 		int			n;
+		char	  **reqexts;
 
 		appendPQExpBufferStr(q, "-- For binary upgrade, create an empty extension and insert objects into it\n");
 
@@ -11984,7 +12043,14 @@ dumpExtension(Archive *fout, const ExtensionInfo *extinfo)
 		else
 			appendPQExpBufferStr(q, "NULL");
 		appendPQExpBufferStr(q, ", ");
-		appendPQExpBufferStr(q, "ARRAY[");
+		/*
+		 * Collect the names of the extensions this one requires.  The
+		 * dependency array is in the order getDependencies() read the
+		 * pg_depend rows, which is a function of the required extensions'
+		 * OIDs; sort the names so that the output depends only on the
+		 * database's logical content.
+		 */
+		reqexts = (char **) pg_malloc(extinfo->dobj.nDeps * sizeof(char *));
 		n = 0;
 		for (i = 0; i < extinfo->dobj.nDeps; i++)
 		{
@@ -11992,14 +12058,20 @@ dumpExtension(Archive *fout, const ExtensionInfo *extinfo)
 
 			extobj = findObjectByDumpId(extinfo->dobj.dependencies[i]);
 			if (extobj && extobj->objType == DO_EXTENSION)
-			{
-				if (n++ > 0)
-					appendPQExpBufferChar(q, ',');
-				appendStringLiteralAH(q, extobj->name, fout);
-			}
+				reqexts[n++] = extobj->name;
+		}
+		qsort(reqexts, n, sizeof(char *), pg_qsort_strcmp);
+
+		appendPQExpBufferStr(q, "ARRAY[");
+		for (i = 0; i < n; i++)
+		{
+			if (i > 0)
+				appendPQExpBufferChar(q, ',');
+			appendStringLiteralAH(q, reqexts[i], fout);
 		}
 		appendPQExpBufferStr(q, "]::pg_catalog.text[]");
 		appendPQExpBufferStr(q, ");\n");
+		pg_free(reqexts);
 	}
 
 	if (extinfo->dobj.dump & DUMP_COMPONENT_DEFINITION)
@@ -14572,15 +14644,20 @@ dumpOpclass(Archive *fout, const OpclassInfo *opcinfo)
 	appendPQExpBuffer(query, "SELECT amopstrategy, "
 					  "amopopr::pg_catalog.regoperator, "
 					  "opfname AS sortfamily, "
-					  "nspname AS sortfamilynsp "
+					  "n.nspname AS sortfamilynsp "
 					  "FROM pg_catalog.pg_amop ao JOIN pg_catalog.pg_depend ON "
 					  "(classid = 'pg_catalog.pg_amop'::pg_catalog.regclass AND objid = ao.oid) "
 					  "LEFT JOIN pg_catalog.pg_opfamily f ON f.oid = amopsortfamily "
 					  "LEFT JOIN pg_catalog.pg_namespace n ON n.oid = opfnamespace "
+					  "JOIN pg_catalog.pg_type lt ON lt.oid = ao.amoplefttype "
+					  "JOIN pg_catalog.pg_namespace ln ON ln.oid = lt.typnamespace "
+					  "JOIN pg_catalog.pg_type rt ON rt.oid = ao.amoprighttype "
+					  "JOIN pg_catalog.pg_namespace rn ON rn.oid = rt.typnamespace "
 					  "WHERE refclassid = 'pg_catalog.pg_opclass'::pg_catalog.regclass "
 					  "AND refobjid = '%u'::pg_catalog.oid "
 					  "AND amopfamily = '%s'::pg_catalog.oid "
-					  "ORDER BY amopstrategy",
+					  "ORDER BY amopstrategy, ln.nspname, lt.typname, "
+					  "rn.nspname, rt.typname",
 					  opcinfo->dobj.catId.oid,
 					  opcfamily);
 
@@ -14634,12 +14711,19 @@ dumpOpclass(Archive *fout, const OpclassInfo *opcinfo)
 					  "amproc::pg_catalog.regprocedure, "
 					  "amproclefttype::pg_catalog.regtype, "
 					  "amprocrighttype::pg_catalog.regtype "
-					  "FROM pg_catalog.pg_amproc ap, pg_catalog.pg_depend "
+					  "FROM pg_catalog.pg_amproc ap, pg_catalog.pg_depend, "
+					  "pg_catalog.pg_type lt, pg_catalog.pg_namespace ln, "
+					  "pg_catalog.pg_type rt, pg_catalog.pg_namespace rn "
 					  "WHERE refclassid = 'pg_catalog.pg_opclass'::pg_catalog.regclass "
 					  "AND refobjid = '%u'::pg_catalog.oid "
 					  "AND classid = 'pg_catalog.pg_amproc'::pg_catalog.regclass "
 					  "AND objid = ap.oid "
-					  "ORDER BY amprocnum",
+					  "AND lt.oid = ap.amproclefttype "
+					  "AND ln.oid = lt.typnamespace "
+					  "AND rt.oid = ap.amprocrighttype "
+					  "AND rn.oid = rt.typnamespace "
+					  "ORDER BY amprocnum, ln.nspname, lt.typname, "
+					  "rn.nspname, rt.typname",
 					  opcinfo->dobj.catId.oid);
 
 	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
@@ -14774,15 +14858,20 @@ dumpOpfamily(Archive *fout, const OpfamilyInfo *opfinfo)
 	appendPQExpBuffer(query, "SELECT amopstrategy, "
 					  "amopopr::pg_catalog.regoperator, "
 					  "opfname AS sortfamily, "
-					  "nspname AS sortfamilynsp "
+					  "n.nspname AS sortfamilynsp "
 					  "FROM pg_catalog.pg_amop ao JOIN pg_catalog.pg_depend ON "
 					  "(classid = 'pg_catalog.pg_amop'::pg_catalog.regclass AND objid = ao.oid) "
 					  "LEFT JOIN pg_catalog.pg_opfamily f ON f.oid = amopsortfamily "
 					  "LEFT JOIN pg_catalog.pg_namespace n ON n.oid = opfnamespace "
+					  "JOIN pg_catalog.pg_type lt ON lt.oid = ao.amoplefttype "
+					  "JOIN pg_catalog.pg_namespace ln ON ln.oid = lt.typnamespace "
+					  "JOIN pg_catalog.pg_type rt ON rt.oid = ao.amoprighttype "
+					  "JOIN pg_catalog.pg_namespace rn ON rn.oid = rt.typnamespace "
 					  "WHERE refclassid = 'pg_catalog.pg_opfamily'::pg_catalog.regclass "
 					  "AND refobjid = '%u'::pg_catalog.oid "
 					  "AND amopfamily = '%u'::pg_catalog.oid "
-					  "ORDER BY amopstrategy",
+					  "ORDER BY amopstrategy, ln.nspname, lt.typname, "
+					  "rn.nspname, rt.typname",
 					  opfinfo->dobj.catId.oid,
 					  opfinfo->dobj.catId.oid);
 
@@ -14794,12 +14883,19 @@ dumpOpfamily(Archive *fout, const OpfamilyInfo *opfinfo)
 					  "amproc::pg_catalog.regprocedure, "
 					  "amproclefttype::pg_catalog.regtype, "
 					  "amprocrighttype::pg_catalog.regtype "
-					  "FROM pg_catalog.pg_amproc ap, pg_catalog.pg_depend "
+					  "FROM pg_catalog.pg_amproc ap, pg_catalog.pg_depend, "
+					  "pg_catalog.pg_type lt, pg_catalog.pg_namespace ln, "
+					  "pg_catalog.pg_type rt, pg_catalog.pg_namespace rn "
 					  "WHERE refclassid = 'pg_catalog.pg_opfamily'::pg_catalog.regclass "
 					  "AND refobjid = '%u'::pg_catalog.oid "
 					  "AND classid = 'pg_catalog.pg_amproc'::pg_catalog.regclass "
 					  "AND objid = ap.oid "
-					  "ORDER BY amprocnum",
+					  "AND lt.oid = ap.amproclefttype "
+					  "AND ln.oid = lt.typnamespace "
+					  "AND rt.oid = ap.amprocrighttype "
+					  "AND rn.oid = rt.typnamespace "
+					  "ORDER BY amprocnum, ln.nspname, lt.typname, "
+					  "rn.nspname, rt.typname",
 					  opfinfo->dobj.catId.oid);
 
 	res_procs = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
@@ -16726,7 +16822,8 @@ findSecLabels(Oid classoid, Oid objoid, SecLabelItem **items)
  * Construct a table of all security labels available for database objects;
  * also set the has-seclabel component flag for each relevant object.
  *
- * The table is sorted by classoid/objid/objsubid for speed in lookup.
+ * The table is sorted by classoid/objid/objsubid/provider for speed in
+ * lookup.
  */
 static void
 collectSecLabels(Archive *fout)
@@ -16744,10 +16841,16 @@ collectSecLabels(Archive *fout)
 
 	query = createPQExpBuffer();
 
+	/*
+	 * Sort by provider as well.  It is the remaining column of pg_seclabel's
+	 * unique key, so adding it makes the ordering total; without it, the
+	 * order of the labels an object has from different providers would come
+	 * from physical row order, making the dump unstable.
+	 */
 	appendPQExpBufferStr(query,
 						 "SELECT label, provider, classoid, objoid, objsubid "
 						 "FROM pg_catalog.pg_seclabels "
-						 "ORDER BY classoid, objoid, objsubid");
+						 "ORDER BY classoid, objoid, objsubid, provider");
 
 	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
 

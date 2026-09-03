@@ -286,10 +286,10 @@ flagInhTables(Archive *fout, TableInfo *tblinfo, int numTables,
 	for (i = 0; i < numInherits; i++)
 	{
 		/*
-		 * Skip a hashtable lookup if it's same table as last time.  This is
-		 * unlikely for the child, but less so for the parent.  (Maybe we
-		 * should ask the backend for a sorted array to make it more likely?
-		 * Not clear the sorting effort would be repaid, though.)
+		 * Skip a hashtable lookup if it's same table as last time.
+		 * getInherits() sorts by inhrelid, so consecutive rows for the same
+		 * child do come together; repeats of the same parent are less
+		 * predictable.
 		 */
 		if (child == NULL ||
 			child->dobj.catId.oid != inhinfo[i].inhrelid)

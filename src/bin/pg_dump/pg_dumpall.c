@@ -1373,7 +1373,7 @@ dumpTablespaces(PGconn *conn)
 					   "pg_catalog.shobj_description(oid, 'pg_tablespace') "
 					   "FROM pg_catalog.pg_tablespace "
 					   "WHERE spcname !~ '^pg_' "
-					   "ORDER BY 1");
+					   "ORDER BY 2");
 
 	if (PQntuples(res) > 0)
 		fprintf(OPF, "--\n-- Tablespaces\n--\n\n");
