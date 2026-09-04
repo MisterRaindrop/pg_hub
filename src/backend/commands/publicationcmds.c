@@ -1398,7 +1398,7 @@ AlterPublicationTables(AlterPublicationStmt *stmt, HeapTuple tup,
 				oldrel->columns = NIL;
 				oldrel->except = false;
 				oldrel->relation = table_open(oldrelid,
-											  ShareUpdateExclusiveLock);
+											  ShareRowExclusiveLock);
 				delrels = lappend(delrels, oldrel);
 			}
 		}
@@ -1831,8 +1831,20 @@ RemovePublicationSchemaById(Oid psoid)
 
 /*
  * Open relations specified by a PublicationTable list.
- * The returned tables are locked in ShareUpdateExclusiveLock mode in order to
- * add them to a publication.
+ *
+ * The returned tables are locked in ShareRowExclusiveLock mode in order to add
+ * them to a publication.  The lock must conflict with RowExclusiveLock. Adding
+ * a table to a publication, or changing its row filter or column list, can
+ * affect both whether an UPDATE or DELETE is allowed and what tuple data is
+ * written to WAL. These decisions use the publication definition from the
+ * catalog snapshot taken at statement start and cannot be changed after the
+ * WAL is written. Logical decoding, however, uses the publication definition
+ * visible at commit time. Allowing this DDL to commit while a modification
+ * is in progress could therefore make WAL logging and logical decoding use
+ * different publication definitions. RowExclusiveLock is used by data
+ * modifications, so conflicting with it ensures that writers are blocked
+ * while the DDL runs and keeps the publication definition consistent for
+ * the entire modification. Readers are unaffected.
  */
 static List *
 OpenTableList(List *tables)
@@ -1857,7 +1869,7 @@ OpenTableList(List *tables)
 		/* Allow query cancel in case this takes a long time */
 		CHECK_FOR_INTERRUPTS();
 
-		rel = table_openrv(t->relation, ShareUpdateExclusiveLock);
+		rel = table_openrv(t->relation, ShareRowExclusiveLock);
 		myrelid = RelationGetRelid(rel);
 
 		/*
@@ -1883,7 +1895,7 @@ OpenTableList(List *tables)
 						 errmsg("conflicting or redundant column lists for table \"%s\"",
 								RelationGetRelationName(rel))));
 
-			table_close(rel, ShareUpdateExclusiveLock);
+			table_close(rel, ShareRowExclusiveLock);
 			continue;
 		}
 
@@ -1912,7 +1924,7 @@ OpenTableList(List *tables)
 			List	   *children;
 			ListCell   *child;
 
-			children = find_all_inheritors(myrelid, ShareUpdateExclusiveLock,
+			children = find_all_inheritors(myrelid, ShareRowExclusiveLock,
 										   NULL);
 
 			foreach(child, children)

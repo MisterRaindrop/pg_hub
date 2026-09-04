@@ -425,6 +425,10 @@ is( $node_subscriber->safe_psql(
 	qq(1),
 	'replication with RI FULL and dropped columns');
 
+# Clean up
+$node_subscriber->safe_psql('postgres', "DROP SUBSCRIPTION sub_dropped_cols");
+$node_publisher->safe_psql('postgres', "DROP PUBLICATION pub_dropped_cols");
+
 $node_publisher->stop('fast');
 $node_subscriber->stop('fast');
 
@@ -516,6 +520,10 @@ like(
 	qr/ERROR:  library "regress" may not be used as an output plugin/,
 	'loading unblessed output plugin fails: stderr');
 
+# Clean up
+$node_subscriber->safe_psql('postgres', "DROP SUBSCRIPTION sub1");
+$node_publisher->safe_psql('postgres', "DROP PUBLICATION pub1");
+
 $node_publisher->stop('fast');
 $node_subscriber->stop('fast');
 
@@ -592,6 +600,10 @@ $result = $node_subscriber->safe_psql('postgres',
 );
 is($result, 't',
 	'remote_lsn has advanced for apply worker raising an exception');
+
+# Clean up
+$node_subscriber->safe_psql('postgres', "DROP SUBSCRIPTION regress_sub");
+$node_publisher->safe_psql('postgres', "DROP PUBLICATION regress_pub");
 
 $node_publisher->stop('fast');
 $node_subscriber->stop('fast');
@@ -755,6 +767,119 @@ DROP SUBSCRIPTION sub_drop_refresh;
 	$node_publisher->safe_psql('postgres',
 		qq{DROP PUBLICATION pub_drop_refresh, pub_seq_drop_refresh;});
 }
+
+$node_publisher->stop('fast');
+$node_subscriber->stop('fast');
+
+# The bug was caused by publication DDL taking ShareUpdateExclusiveLock,
+# which does not conflict with the RowExclusiveLock held by a concurrent
+# data-modifying statement. This allowed the publication definition to change
+# while the statement was in progress. The publisher used the old definition
+# when generating WAL, while logical decoding used the new definition, causing
+# an UPDATE that should have been rejected on the publisher to fail only when
+# applied on the subscriber. The published table has no replica identity, so
+# the publisher sends no replica identity information and the subscriber
+# cannot identify the row using its primary key.
+#
+# The bug is fixed by taking ShareRowExclusiveLock, which conflicts with
+# RowExclusiveLock, so the ALTER PUBLICATION below waits for the in-progress
+# UPDATE. The UPDATE is then decoded while the table is not yet part of any
+# publication, so nothing is sent at all and the subscriber keeps the row it
+# synced.
+$node_publisher->rotate_logfile();
+$node_publisher->start();
+
+$node_subscriber->rotate_logfile();
+$node_subscriber->start();
+
+# An earlier block leaves this pointing at regress_db, and the block that
+# resets it runs only when injection points are available.
+$publisher_connstr = $node_publisher->connstr . ' dbname=postgres';
+
+$node_publisher->safe_psql(
+	'postgres', qq{
+	CREATE TABLE tab_pubrace (id int, val int);
+	INSERT INTO tab_pubrace VALUES (1, 1);
+	CREATE PUBLICATION pub_pubrace_sync FOR TABLE tab_pubrace;
+	CREATE PUBLICATION pub_pubrace_filtered;
+});
+
+$node_subscriber->safe_psql(
+	'postgres', qq{
+	CREATE TABLE tab_pubrace (id int PRIMARY KEY, val int);
+	CREATE SUBSCRIPTION sub_pubrace CONNECTION '$publisher_connstr'
+		PUBLICATION pub_pubrace_sync, pub_pubrace_filtered;
+});
+
+$node_subscriber->wait_for_subscription_sync($node_publisher, 'sub_pubrace');
+
+is( $node_subscriber->safe_psql(
+		'postgres', 'SELECT id, val FROM tab_pubrace'),
+	'1|1',
+	'initial sync copied the row before the concurrent publication DDL');
+
+# Leave the table published by nothing, so that the racing DDL is what
+# introduces the row filter.
+$node_publisher->safe_psql('postgres',
+	'ALTER PUBLICATION pub_pubrace_sync DROP TABLE tab_pubrace');
+
+my $pubrace_offset = -s $node_subscriber->logfile;
+
+# Hold an UPDATE open. Its WAL record has already been written by the time the
+# statement returns, which is all the window needs.
+my $pubrace_dml = $node_publisher->background_psql('postgres');
+$pubrace_dml->query_safe(
+	"BEGIN;\nUPDATE tab_pubrace SET val = 2 WHERE id = 1;");
+
+# Issue the DDL without waiting for it: it must not be able to commit while the
+# UPDATE is in progres. A filter on val is invalid for UPDATE here, val being
+# outside the replica identity.
+my $pubrace_ddl = $node_publisher->background_psql('postgres');
+$pubrace_ddl->query_until(
+	qr/issued/, q{
+	\echo issued
+	ALTER PUBLICATION pub_pubrace_filtered
+		ADD TABLE tab_pubrace WHERE (val = 2 OR val = 1);
+});
+
+ok( $node_publisher->poll_query_until(
+		'postgres', qq{
+	SELECT EXISTS (SELECT 1 FROM pg_locks
+		WHERE relation = 'tab_pubrace'::regclass
+		  AND mode = 'ShareRowExclusiveLock'
+		  AND NOT granted)}),
+	'ALTER PUBLICATION waits for a concurrent data-modifying statement');
+
+$pubrace_dml->query_safe('COMMIT');
+$pubrace_dml->quit;
+$pubrace_ddl->query_until(qr/finished/, "\\echo finished\n");
+$pubrace_ddl->quit;
+
+$node_publisher->wait_for_catchup('sub_pubrace');
+
+ok( !$node_subscriber->log_contains(
+		qr/publisher did not send replica identity column expected/,
+		$pubrace_offset),
+	'no apply error from publication DDL racing an UPDATE');
+
+# Verify that the UPDATE succeeded on the publisher.
+is( $node_publisher->safe_psql(
+		'postgres', 'SELECT id, val FROM tab_pubrace ORDER BY id'),
+	'1|2',
+	'UPDATE committed on the publisher');
+
+# The UPDATE is not sent because it was decoded before the table was added
+# to the publication.
+is( $node_subscriber->safe_psql(
+		'postgres', 'SELECT id, val FROM tab_pubrace ORDER BY id'),
+	'1|1',
+	'subscriber unchanged, the table being unpublished when the UPDATE committed'
+);
+
+# Clean up
+$node_subscriber->safe_psql('postgres', 'DROP SUBSCRIPTION sub_pubrace');
+$node_publisher->safe_psql('postgres',
+	'DROP PUBLICATION pub_pubrace_sync, pub_pubrace_filtered');
 
 $node_publisher->stop('fast');
 $node_subscriber->stop('fast');
