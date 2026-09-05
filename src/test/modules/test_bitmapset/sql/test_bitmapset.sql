@@ -426,4 +426,16 @@ SELECT test_random_operations(NULL, 10000, 0, 81920) > 0 AS result;
 -- perform some random tests on bms_offset_members()
 SELECT test_random_offset_operations(NULL, 1000, 0, 1024) AS result;
 
+-- malformed inputs, rejected before reaching the read routines of other
+-- node types
+SELECT test_bms_num_members('{QUERY}'); -- error
+SELECT test_bms_num_members('42'); -- error
+SELECT test_bms_num_members('(i 1 2)'); -- error
+SELECT test_bms_num_members('(b 1'); -- error
+SELECT test_bms_num_members('(b x)'); -- error
+SELECT test_bms_num_members(''); -- error
+-- empty set, as written by nodeToString()
+SELECT test_bms_num_members('<>') AS result;
+SELECT test_bms_copy('<>') AS result;
+
 DROP EXTENSION test_bitmapset;

@@ -24,6 +24,7 @@
 #include "nodes/bitmapset.h"
 #include "nodes/nodes.h"
 #include "nodes/pg_list.h"
+#include "nodes/readfuncs.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/timestamp.h"
@@ -86,16 +87,57 @@ PG_FUNCTION_INFO_V1(test_random_offset_operations);
 				 #expr, __FILE__, __LINE__); \
 	} while (0)
 
-/* Encode/Decode to/from TEXT and Bitmapset */
+/* Encode a Bitmapset into its serialized representation */
 #define BITMAPSET_TO_TEXT(bms) cstring_to_text(nodeToString(bms))
-#define TEXT_TO_BITMAPSET(str) ((Bitmapset *) stringToNode(text_to_cstring(str)))
+
+/*
+ * Decode a Bitmapset from its serialized representation via stringToNode().
+ *
+ * stringToNode() assumes its input to be valid, and the read routines of
+ * readfuncs.c it dispatches to for other node types do not check for missing
+ * tokens, so handing it a string naming any of those could crash the backend.
+ * Hence, look at the leading tokens first and accept only the two forms
+ * written by nodeToString() for a Bitmapset: "<>" for an empty set, which
+ * pg_strtok() returns as a token of length zero, or "(b member ...)".  The
+ * code reading the latter in nodeRead() checks every token it consumes.
+ */
+static Bitmapset *
+text_to_bitmapset(text *txt)
+{
+	char	   *str = text_to_cstring(txt);
+	ReadNodeContext ctx = {.str = str};
+	const char *token;
+	int			length;
+	bool		is_bitmapset = false;
+	Node	   *node;
+
+	token = pg_strtok(&ctx, &length);
+	if (token != NULL && length == 0)
+		return NULL;
+
+	if (token != NULL && length == 1 && token[0] == '(')
+	{
+		token = pg_strtok(&ctx, &length);
+		is_bitmapset = token != NULL && length == 1 && token[0] == 'b';
+	}
+
+	if (!is_bitmapset)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("argument is not a serialized Bitmapset")));
+
+	node = stringToNode(str);
+	Assert(node == NULL || IsA(node, Bitmapset));
+
+	return (Bitmapset *) node;
+}
 
 /*
  * Helper macro to fetch text parameters as Bitmapsets. SQL-NULL means empty
  * set.
  */
 #define PG_ARG_GETBITMAPSET(n) \
-	(PG_ARGISNULL(n) ? NULL : TEXT_TO_BITMAPSET(PG_GETARG_TEXT_PP(n)))
+	(PG_ARGISNULL(n) ? NULL : text_to_bitmapset(PG_GETARG_TEXT_PP(n)))
 
 /*
  * Helper macro to handle converting sets back to text, returning the

@@ -1656,4 +1656,31 @@ SELECT test_random_offset_operations(NULL, 1000, 0, 1024) AS result;
    1000
 (1 row)
 
+-- malformed inputs, rejected before reaching the read routines of other
+-- node types
+SELECT test_bms_num_members('{QUERY}'); -- error
+ERROR:  argument is not a serialized Bitmapset
+SELECT test_bms_num_members('42'); -- error
+ERROR:  argument is not a serialized Bitmapset
+SELECT test_bms_num_members('(i 1 2)'); -- error
+ERROR:  argument is not a serialized Bitmapset
+SELECT test_bms_num_members('(b 1'); -- error
+ERROR:  unterminated Bitmapset structure
+SELECT test_bms_num_members('(b x)'); -- error
+ERROR:  unrecognized integer: "x"
+SELECT test_bms_num_members(''); -- error
+ERROR:  argument is not a serialized Bitmapset
+-- empty set, as written by nodeToString()
+SELECT test_bms_num_members('<>') AS result;
+ result 
+--------
+      0
+(1 row)
+
+SELECT test_bms_copy('<>') AS result;
+ result 
+--------
+ <>
+(1 row)
+
 DROP EXTENSION test_bitmapset;
