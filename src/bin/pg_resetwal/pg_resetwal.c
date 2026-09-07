@@ -43,7 +43,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "access/heaptoast.h"
 #include "access/multixact.h"
 #include "access/transam.h"
 #include "access/xlog.h"
@@ -737,7 +736,6 @@ GuessControlValues(void)
 	ControlFile.xlog_seg_size = DEFAULT_XLOG_SEG_SIZE;
 	ControlFile.nameDataLen = NAMEDATALEN;
 	ControlFile.indexMaxKeys = INDEX_MAX_KEYS;
-	ControlFile.toast_max_chunk_size = TOAST_OID_MAX_CHUNK_SIZE;
 	ControlFile.loblksize = LOBLKSIZE;
 	ControlFile.float8ByVal = true; /* vestigial */
 
@@ -812,8 +810,6 @@ PrintControlValues(bool guessed)
 		   ControlFile.nameDataLen);
 	printf(_("Maximum columns in an index:          %u\n"),
 		   ControlFile.indexMaxKeys);
-	printf(_("Maximum size of a TOAST chunk:        %u\n"),
-		   ControlFile.toast_max_chunk_size);
 	printf(_("Size of a large-object chunk:         %u\n"),
 		   ControlFile.loblksize);
 	/* This is no longer configurable, but users may still expect to see it: */

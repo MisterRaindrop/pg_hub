@@ -57,7 +57,6 @@ get_control_data(ClusterInfo *cluster)
 	bool		got_walseg = false;
 	bool		got_ident = false;
 	bool		got_index = false;
-	bool		got_toast = false;
 	bool		got_large_object = false;
 	bool		got_date_is_int = false;
 	bool		got_data_checksum_version = false;
@@ -398,17 +397,6 @@ get_control_data(ClusterInfo *cluster)
 			cluster->controldata.index = str2uint(p);
 			got_index = true;
 		}
-		else if ((p = strstr(bufin, "Maximum size of a TOAST chunk:")) != NULL)
-		{
-			p = strchr(p, ':');
-
-			if (p == NULL || strlen(p) <= 1)
-				pg_fatal("%d: controldata retrieval problem", __LINE__);
-
-			p++;				/* remove ':' char */
-			cluster->controldata.toast = str2uint(p);
-			got_toast = true;
-		}
 		else if ((p = strstr(bufin, "Size of a large-object chunk:")) != NULL)
 		{
 			p = strchr(p, ':');
@@ -527,8 +515,7 @@ get_control_data(ClusterInfo *cluster)
 		!got_mxoff || (!live_check && !got_nextxlogfile) ||
 		!got_float8_pass_by_value || !got_align || !got_blocksz ||
 		!got_largesz || !got_walsz || !got_walseg || !got_ident ||
-		!got_index || !got_toast ||
-		!got_large_object ||
+		!got_index || !got_large_object ||
 		!got_date_is_int || !got_data_checksum_version ||
 		(!got_default_char_signedness &&
 		 cluster->controldata.cat_ver >= DEFAULT_CHAR_SIGNEDNESS_CAT_VER))
@@ -585,9 +572,6 @@ get_control_data(ClusterInfo *cluster)
 		if (!got_index)
 			pg_log(PG_REPORT, "  maximum number of indexed columns");
 
-		if (!got_toast)
-			pg_log(PG_REPORT, "  maximum TOAST chunk size");
-
 		if (!got_large_object)
 			pg_log(PG_REPORT, "  large-object chunk size");
 
@@ -637,9 +621,6 @@ check_control_data(ControlData *oldctrl,
 
 	if (oldctrl->index == 0 || oldctrl->index != newctrl->index)
 		pg_fatal("old and new pg_controldata maximum indexed columns are invalid or do not match");
-
-	if (oldctrl->toast == 0 || oldctrl->toast != newctrl->toast)
-		pg_fatal("old and new pg_controldata maximum TOAST chunk sizes are invalid or do not match");
 
 	if (oldctrl->large_object == 0 ||
 		oldctrl->large_object != newctrl->large_object)

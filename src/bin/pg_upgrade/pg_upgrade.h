@@ -228,7 +228,6 @@ typedef struct
 	uint32		walseg;
 	uint32		ident;
 	uint32		index;
-	uint32		toast;
 	uint32		large_object;
 	bool		date_is_int;
 	bool		float8_pass_by_value;
