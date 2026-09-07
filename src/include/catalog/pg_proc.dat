@@ -7045,6 +7045,9 @@
 { oid => '315', descr => 'Is JIT compilation available in this session?',
   proname => 'pg_jit_available', provolatile => 'v', prorettype => 'bool',
   proargtypes => '', prosrc => 'pg_jit_available' },
+{ oid => '9312', descr => 'is OpenSSL FIPS mode enabled',
+  proname => 'fips_mode', provolatile => 'v', prorettype => 'bool',
+  proargtypes => '', prosrc => 'pg_fips_mode' },
 
 { oid => '2971', descr => 'convert boolean to text',
   proname => 'text', prorettype => 'text', proargtypes => 'bool',

@@ -489,7 +489,8 @@ PG_FUNCTION_INFO_V1(pg_check_fipsmode);
 Datum
 pg_check_fipsmode(PG_FUNCTION_ARGS)
 {
-	PG_RETURN_BOOL(CheckFIPSMode());
+	/* redirect to built-in function */
+	return pg_fips_mode(fcinfo);
 }
 
 static void *

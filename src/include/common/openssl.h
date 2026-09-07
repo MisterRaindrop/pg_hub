@@ -40,4 +40,6 @@
 
 #endif							/* USE_OPENSSL */
 
+extern bool pg_openssl_is_fips_enabled(void);
+
 #endif							/* COMMON_OPENSSL_H */
