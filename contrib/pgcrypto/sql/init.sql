@@ -4,6 +4,9 @@
 
 CREATE EXTENSION pgcrypto;
 
+-- check that the compatibility function agrees with core
+select public.fips_mode() = pg_catalog.fips_mode() AS same_fips_mode;
+
 -- check error handling
 select gen_salt('foo');
 select digest('foo', 'foo');

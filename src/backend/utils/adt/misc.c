@@ -29,6 +29,7 @@
 #include "catalog/system_fk_info.h"
 #include "commands/tablespace.h"
 #include "common/keywords.h"
+#include "common/openssl.h"
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "nodes/miscnodes.h"
@@ -216,6 +217,16 @@ current_database(PG_FUNCTION_ARGS)
 
 	namestrcpy(db, get_database_name(MyDatabaseId));
 	PG_RETURN_NAME(db);
+}
+
+
+/*
+ * Return whether FIPS mode is enabled in the underlying OpenSSL installation.
+ */
+Datum
+pg_fips_mode(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_BOOL(pg_openssl_is_fips_enabled());
 }
 
 

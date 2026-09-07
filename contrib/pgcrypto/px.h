@@ -188,7 +188,6 @@ const char *px_resolve_alias(const PX_Alias *list, const char *name);
 
 void		px_set_debug_handler(void (*handler) (const char *));
 
-bool		CheckFIPSMode(void);
 void		CheckBuiltinCryptoMode(void);
 
 #ifdef PX_DEBUG

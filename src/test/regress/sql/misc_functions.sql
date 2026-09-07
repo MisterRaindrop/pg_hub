@@ -5,6 +5,15 @@
 \set regresslib :libdir '/regress' :dlsuffix
 
 --
+-- fips_mode()
+--
+
+SELECT CASE WHEN current_setting('ssl_library') = ''
+            THEN NOT fips_mode()
+            ELSE fips_mode() IS NOT NULL
+       END AS valid;
+
+--
 -- num_nulls()
 --
 

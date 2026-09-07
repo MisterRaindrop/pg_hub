@@ -2,6 +2,13 @@
 -- init pgcrypto
 --
 CREATE EXTENSION pgcrypto;
+-- check that the compatibility function agrees with core
+select public.fips_mode() = pg_catalog.fips_mode() AS same_fips_mode;
+ same_fips_mode 
+----------------
+ t
+(1 row)
+
 -- check error handling
 select gen_salt('foo');
 ERROR:  gen_salt: Unknown salt algorithm
