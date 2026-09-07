@@ -2669,6 +2669,32 @@ finalize_plan(PlannerInfo *root, Plan *plan,
 			context.paramids = bms_add_members(context.paramids, scan_params);
 			break;
 
+		case T_GraphScan:
+			{
+				GraphScan  *gs = (GraphScan *) plan;
+				ListCell   *lc;
+
+				/*
+				 * The graph's element WHERE clauses (and their COLUMNS
+				 * subexprs), the graph-level WHERE clause, and the per-table
+				 * RLS quals live outside the standard scan targetlist/qual,
+				 * so finalize_primnode() on the targetlist/qual never sees
+				 * the PARAM_EXEC references they carry (e.g. nestloop params
+				 * injected by replace_nestloop_params, or SubPlan params).
+				 * Walk them here so extParam/allParam include every parameter
+				 * the scan depends on.
+				 */
+				finalize_primnode((Node *) gs->graph_pattern, &context);
+				foreach(lc, gs->rls_quals)
+				{
+					GraphRLSQual *rlsq = lfirst_node(GraphRLSQual, lc);
+
+					finalize_primnode((Node *) rlsq->quals, &context);
+				}
+				context.paramids = bms_add_members(context.paramids, scan_params);
+			}
+			break;
+
 		case T_SampleScan:
 			finalize_primnode((Node *) ((SampleScan *) plan)->tablesample,
 							  &context);

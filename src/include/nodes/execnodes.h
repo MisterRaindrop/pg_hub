@@ -2104,6 +2104,372 @@ typedef struct ForeignScanState
 } ForeignScanState;
 
 /* ----------------
+ *	 GraphScanState information
+ *
+ *		GraphScan nodes are used to execute property graph scans (SQL/PGQ).
+ * ----------------
+ */
+
+/* Direction for edge traversal */
+typedef enum EdgeDirection
+{
+	GRAPH_DIR_OUTGOING = 0,		/* -(e)-> or -> */
+	GRAPH_DIR_INCOMING,			/* <-(e)- or <- */
+	GRAPH_DIR_UNDIRECTED		/* -(e)- */
+}			EdgeDirection;
+
+/*
+ * One label-property binding for a graph element (built at scan init).
+ * The expression is parsed from the catalog's stored text once and cached
+ * so that property resolution and privilege/validation checks do not need
+ * repeated catalog rescans.
+ */
+typedef struct GraphPropExpr
+{
+	Oid			propid;			/* pg_propgraph_property OID */
+	Oid			labelid;		/* label OID the binding is attached to */
+	Node	   *expr;			/* plpexpr, parsed via stringToNode */
+	struct ExprState *exprstate;	/* compiled ExprState (built at scan init)
+									 * or NULL; evaluated on ecxt_scantuple */
+	struct GraphPropExpr *next;
+}			GraphPropExpr;
+
+/*
+ * Cached propid -> physical-column attnum mapping for an element's backing
+ * table.  Lets the hot per-row paths read a property column directly without
+ * resolving the property name and scanning the TupleDesc each time.
+ */
+typedef struct GraphPropAttnum
+{
+	Oid			propid;			/* pg_propgraph_property OID */
+	AttrNumber	attnum;			/* backing-table attribute number */
+}			GraphPropAttnum;
+
+/* Scan capabilities of a graph element's backing table */
+#define GRAPHELEM_PLAIN		0x01	/* direct heap scan */
+#define GRAPHELEM_PART		0x02	/* partitioned/inherited: child scans */
+#define GRAPHELEM_VIEW		0x04	/* SPI-backed view scan */
+#define GRAPHELEM_FDW		0x08	/* foreign table scan */
+
+/* Per-element metadata built from pg_propgraph_element during init */
+typedef struct GraphElementRelInfo
+{
+	Oid			element_oid;	/* pg_propgraph_element OID */
+	Oid			table_oid;		/* underlying heap relation OID */
+	char		element_kind;	/* 'v' for vertex, 'e' for edge */
+	char		relkind;		/* relation kind of backing table */
+	Relation	heap_rel;		/* opened heap relation handle */
+	TupleDesc	tupdesc;		/* table tuple descriptor */
+
+	/*
+	 * Cached scan capabilities, derived once at init from relkind and the
+	 * expanded-children state.  Replaces repeated is_*_relation() checks in
+	 * the per-row scan paths.
+	 */
+	int			caps;
+
+	/*
+	 * Foreign key attribute mappings for edges.
+	 */
+	int			nsrc_fk_attnums;	/* number of source FK columns */
+	AttrNumber *src_fk_attnums; /* array of source FK attnums */
+	int			ndst_fk_attnums;	/* number of destination FK columns */
+	AttrNumber *dst_fk_attnums; /* array of destination FK attnums */
+
+	/*
+	 * Cached property -> physical-column attribute mapping for this element's
+	 * backing table.  Built once at scan init alongside prop_exprs; lets the
+	 * per-row paths read property columns directly without repeatedly
+	 * scanning the TupleDesc by name.
+	 */
+	int			nprop_attnums;	/* number of entries in prop_attnums */
+	GraphPropAttnum *prop_attnums;	/* densely packed array of the entries */
+
+	/* Vertex element OIDs that this edge connects */
+	Oid			src_vertex_elemid;	/* element OID of source vertex */
+	Oid			dest_vertex_elemid; /* element OID of destination vertex */
+
+	/* Element key: primary key attnums for vertices */
+	int			nkey_attnums;
+	AttrNumber *key_attnums;
+
+	/*
+	 * Per-column equality functions used to compare key/FK values type-safely
+	 * at runtime.  Built once at executor init from each column's type; NULL
+	 * when the corresponding arrays are empty.  Without these, comparing e.g.
+	 * bigint/text/uuid keys with DatumGetInt32 would silently give wrong
+	 * answers.
+	 */
+	FmgrInfo   *key_eq;			/* per key column (vertices) */
+	FmgrInfo   *src_fk_eq;		/* per source FK column (edges) */
+	FmgrInfo   *dst_fk_eq;		/* per destination FK column (edges) */
+
+	/*
+	 * Label OIDs that this element belongs to (from
+	 * pg_propgraph_element_label)
+	 */
+	int			nlabels;
+	Oid			label_oids[32];
+
+	/*
+	 * Property expressions for this element, collected from
+	 * pg_propgraph_label_property at init time.  NULL if none.
+	 */
+	GraphPropExpr *prop_exprs;
+
+	/*
+	 * Compiled RLS qual for this element's backing table (plan-time SELECT
+	 * RLS quals, Vars on OUTER_VAR).  NULL if RLS does not apply.
+	 */
+	ExprState  *rls_qual;
+
+	/*
+	 * Mutable scan state for the element's backing table.  The fields above
+	 * are immutable schema metadata built once at scan init; this state is
+	 * (re)initialized for each scan / rescan and cleaned up at end.
+	 */
+	struct GraphElementScanInfo
+	{
+		/*
+		 * Active scan handle for the element.  For plain relations /
+		 * materialized views this is a direct heap scan; for partitioned /
+		 * inherited tables the child scans below are used instead.
+		 */
+		struct TableScanDescData *scan;
+
+		/* For partitioned/inherited tables: leaf children */
+		int			nchildren;	/* number of leaf children (0 if not expanded) */
+		int			current_child;	/* which child we're currently scanning */
+		Snapshot	child_snapshot; /* snapshot for child scan creation */
+		Relation   *child_rels; /* per-child opened relations (lazy init) */
+		struct TableScanDescData **child_scans; /* per-child scan descriptors
+												 * (lazy init) */
+		TupleTableSlot **child_slots;	/* per-child scan slots */
+
+		/* For views: SPI-based scan state */
+		PlanState  *view_subplan;	/* non-NULL signals view-backed */
+		int			view_current;	/* current row index in SPI result */
+		uint64		view_ntuples;	/* total number of tuples */
+		TupleTableSlot *view_slot;	/* scan slot for view/FDW scan */
+
+		/* For foreign tables: FDW state */
+		struct FdwRoutine *fdw_routine; /* FDW callbacks (non-NULL only for
+										 * FDW) */
+		struct ForeignScanState *fdw_scan_state;	/* initialized
+													 * ForeignScanState */
+	}			scan;
+}			GraphElementRelInfo;
+
+/*
+ * One frame of the VLE (Variable-Length Edge) DFS stack.  Stores the vertex
+ * identity at a depth level plus the edge-scan resume position for that
+ * level's outgoing edges.
+ */
+typedef struct GraphVLEFrame
+{
+	Oid			elemid;			/* element_oid of the vertex at this depth */
+	int			nkeys;			/* number of key columns */
+	Datum	   *values;			/* PK values of the vertex */
+	bool	   *nulls;			/* null flags */
+	int			table_idx;		/* edge table index for resume */
+	int			scan_pass;		/* scan pass for resume */
+	struct TableScanDescData *edge_scan;	/* own edge scan per frame */
+	TupleTableSlot *edge_slot;	/* own edge slot per frame */
+}			GraphVLEFrame;
+
+/*
+ * HopFrame - state for one hop in a multi-hop graph traversal.
+ *
+ * A hop moves from one vertex to another via edges.  Each hop has its own
+ * edge scan state, allowing independent iteration.  Multi-hop queries are
+ * chains of hop frames.
+ */
+typedef struct GraphHopFrame
+{
+	/* Edge scan state for this hop */
+	struct TableScanDescData *edge_scan;	/* active heap scan on edge table */
+	TupleTableSlot *edge_slot;	/* current edge tuple */
+	int			edge_table_index;	/* which edge catalog table we're scanning */
+	int			scan_pass;		/* 0=outgoing, 1=incoming (undirected) */
+
+	/* Source vertex: what edges are scanned FROM */
+	int			nfrom;			/* number of key columns */
+	Datum	   *from_vertex_values; /* PK values of source vertex */
+	bool	   *from_vertex_nulls;	/* null flags */
+	TupleTableSlot *from_vertex_slot;	/* source vertex tuple */
+	Oid			from_vertex_elemid; /* element_oid of the source vertex's
+									 * catalog element */
+
+	/* Current destination vertex (matched by the current edge) */
+	TupleTableSlot *to_vertex_slot; /* matched destination vertex tuple */
+	Oid			to_vertex_elemid;	/* element_oid of the destination vertex's
+									 * catalog element */
+	int			nto;			/* number of key columns */
+	Datum	   *to_vertex_values;	/* PK values of destination vertex */
+	bool	   *to_vertex_nulls;	/* null flags */
+
+	/*
+	 * For undirected scans: TID and edge catalog index of an edge already
+	 * accepted on pass 0 (outgoing).  On pass 1 (incoming), skip edges from
+	 * the same table whose TID matches, to avoid reporting the same self-loop
+	 * edge twice.
+	 */
+	ItemPointerData undirected_seen_tid;
+	int			undirected_seen_edge_idx;
+	bool		undirected_has_seen;
+
+	/*
+	 * VLE (Variable-Length Edge): DFS exploration stack for hops with a
+	 * quantifier {m,n}.  When no quantifier is present (implicit {1,1}),
+	 * vle_lower = vle_upper = 1 and the stack has capacity 2.
+	 *
+	 * Stack frames are indexed by depth (0 = source, upper = deepest). Each
+	 * frame stores the vertex identity and edge-scan resume position.
+	 * vle_stack_top is -1 when the stack is empty.
+	 */
+	bool		vle_active;		/* DFS exploration in progress */
+	int			vle_lower;		/* lower bound (1 if no quantifier) */
+	int			vle_upper;		/* upper bound (1 if no quantifier) */
+	GraphVLEFrame *vle_stack;	/* VLE DFS stack (depth 0..upper) */
+	int			vle_stack_top;	/* current stack top (-1 = empty) */
+	int			vle_stack_capacity; /* allocated frames = vle_upper + 1 */
+	bool		edge_counted;	/* fixed-hop edge already charged to path_len?
+								 * (avoid double counting on sibling edge
+								 * replacement) */
+}			GraphHopFrame;
+
+/*
+ * One property reference mapped into a compiled WHERE clause's virtual
+ * outer tuple.  qual_virt_slot[attnum-1] is sourced from pattern element
+ * elem_idx (its property propid), reading either the physical column or a
+ * computed property expression.
+ */
+typedef struct GraphRefInfo
+{
+	int			elem_idx;		/* pattern element index (-1 if unresolvable) */
+	Oid			propid;			/* pg_propgraph_property OID */
+	bool		is_edge;		/* element is an edge pattern */
+	Oid			vartype;		/* type of the property Var */
+	int32		typmod;			/* typmod of the property Var */
+	Oid			collation;		/* collation of the property Var */
+}			GraphRefInfo;
+
+typedef struct GraphScanState
+{
+	ScanState	ss;				/* its first field is NodeTag */
+
+	/* Start vertex state: how we fetch the initial vertex */
+	int			n_start_keys;	/* number of key columns */
+	Datum	   *start_vertex_values;	/* PK values of current start vertex */
+	bool	   *start_vertex_nulls; /* null flags */
+	int			start_table_index;	/* which vertex table for start */
+	TupleTableSlot *start_vertex_slot;	/* current start vertex tuple */
+
+	/* The hop chain: one GraphHopFrame per traversal */
+	GraphHopFrame *hops;
+	int			n_hops;			/* number of traversals */
+	int			current_hop;	/* active hop (-1 = fetching start vertex,
+								 * n_hops = done) */
+
+	/* Compiled expression states for WHERE clauses on elements */
+	ExprState **element_quals;	/* array of ExprState* per pattern element */
+	int		   *element_qual_natts; /* per element: #virtual attrs (0 if none) */
+	GraphRefInfo **element_qual_refs;	/* per element: ref table */
+	TupleTableSlot **element_qual_slots;	/* per element: virtual outer tube */
+
+	/*
+	 * Compiled graph-level (outer GraphPattern) WHERE clause.
+	 *
+	 * A graph-level WHERE can reference properties of several pattern
+	 * elements at once (e.g. a.vname = c.vname).  Since ExecEvalExpr reads
+	 * outer Vars from econtext->ecxt_outertuple (a single slot), we compile
+	 * the clause against a "virtual" outer tuple: each distinct
+	 * GraphPropertyRef is mapped to a fixed attribute number in that tuple,
+	 * and graph_qual_refs[] records which pattern element + property each
+	 * attribute is sourced from.  At runtime evaluate_graph_where() fills the
+	 * virtual slot from the current element slots and evaluates graph_qual.
+	 */
+	ExprState  *graph_qual;		/* compiled graph-level WHERE (NULL if none) */
+	int			graph_qual_natts;	/* number of attributes in virtual slot */
+	GraphRefInfo *graph_qual_refs;	/* per virtual attnum: source info */
+	TupleTableSlot *qual_virt_slot; /* virtual outer tuple slot */
+
+	/* Property graph OID */
+	Oid			graph_oid;
+
+	/* Catalog & runtime schema metadata */
+	int			num_elements;	/* total catalog elements in property graph */
+	GraphElementRelInfo *element_info;	/* array of opened physical relations */
+
+	/*
+	 * Precomputed edge -> vertex element indices (indexed by edge element
+	 * index in element_info).  Avoids a linear scan of element_info for each
+	 * matched edge at runtime.  -1 when the referenced vertex element does
+	 * not exist.
+	 */
+	int		   *src_vertex_idx; /* edge element -> source vertex element */
+	int		   *dest_vertex_idx;	/* edge element -> dest vertex element */
+
+	/* Column mapping for projection */
+	int			ncols;
+	int		   *col_elem_index; /* pattern element index (-1 if constant) */
+	char	  **col_propname;	/* property name (NULL if not a graph prop) */
+	Oid		   *col_propid;		/* property OID for runtime resolution */
+	bool	   *col_prop_unsafe;	/* true if property not on ALL candidates */
+
+	/*
+	 * Cached slot pointers for column projection: slot_for_elem[pi] points to
+	 * the TupleTableSlot holding the tuple for pattern element pi.  Built
+	 * during init and updated during execution.
+	 */
+	TupleTableSlot **slot_for_elem;
+	int			num_pi;			/* number of pattern elements */
+
+	/*
+	 * Compiled column expressions from graph_table_columns. For columns that
+	 * need expression evaluation (e.g., FuncExpr wrapping a
+	 * GraphPropertyRef), we compile an ExprState that reads from the element
+	 * slot via ecxt_outertuple.  If col_exprs[ci] is NULL, the column is
+	 * handled by fill_one_slot_attr.
+	 */
+	ExprState **col_exprs;		/* array of ExprState* per scan column
+								 * (graph_table_columns index) */
+	int		   *col_expr_elem_index;	/* which pattern element index each
+										 * col_expr reads from */
+
+	/*
+	 * Shared-variable tracking: when the same variable name appears at
+	 * multiple pattern element positions (e.g., (a)->(b)->(a)), the DFS must
+	 * enforce that the same physical row is used at every occurrence. For
+	 * each pattern element index that shares a variable, we store a group id
+	 * (-1 if unique). Comparison data (PK values for vertices, edge identity)
+	 * are stored per group.
+	 */
+	int		   *samevar_group;	/* per pattern-element index: group id, or -1 */
+	int			nsamevar_groups;	/* number of same-variable groups */
+
+	/*
+	 * Per-group tracking: indexed by samevar_group[id]. The first occurrence
+	 * (lowest pi) stores the authoritative values; later occurrences compare
+	 * against them.
+	 */
+	int		   *samevar_first_pi;	/* first pattern element index in group */
+	char	   *samevar_elem_kind;	/* 'v' for vertex, 'e' for edge */
+	int		   *samevar_nkeys;	/* number of key columns */
+	Datum	  **samevar_key_values; /* stored PK values from first occurrence */
+	bool	  **samevar_key_nulls;	/* null flags for PK values */
+	ItemPointerData *samevar_tid;	/* for edges: TID of first occurrence */
+
+	/* Per-query memory context */
+	MemoryContext graph_cxt;
+
+	/* Total edge count of the current path (reset per start vertex) */
+	int			path_len;
+
+	bool		is_initialized;
+}			GraphScanState;
+
+/* ----------------
  *	 CustomScanState information
  *
  *		CustomScan nodes are used to execute custom code within executor.
@@ -2111,7 +2477,7 @@ typedef struct ForeignScanState
  * Core code must avoid assuming that the CustomScanState is only as large as
  * the structure declared here; providers are allowed to make it the first
  * element in a larger structure, and typically would need to do so.  The
- * struct is actually allocated by the CreateCustomScanState method associated
+ * struct is actually created by the CreateCustomScanState method associated
  * with the plan node.  Any additional fields can be initialized there, or in
  * the BeginCustomScan method.
  * ----------------

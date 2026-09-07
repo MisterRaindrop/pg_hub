@@ -391,6 +391,15 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 			rel->attr_needed = NULL;
 			rel->attr_widths = NULL;
 			break;
+		case RTE_GRAPH_TABLE:
+			/* columns come from eref */
+			rel->min_attr = 0;
+			rel->max_attr = list_length(rte->eref->colnames);
+			rel->attr_needed = (Relids *)
+				palloc0_array(Relids, rel->max_attr - rel->min_attr + 1);
+			rel->attr_widths = (int32 *)
+				palloc0_array(int32, rel->max_attr - rel->min_attr + 1);
+			break;
 		default:
 			elog(ERROR, "unrecognized RTE kind: %d",
 				 (int) rte->rtekind);

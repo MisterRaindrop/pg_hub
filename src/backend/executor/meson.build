@@ -32,6 +32,7 @@ backend_sources += files(
   'nodeFunctionscan.c',
   'nodeGather.c',
   'nodeGatherMerge.c',
+  'nodeGraphScan.c',
   'nodeGroup.c',
   'nodeHash.c',
   'nodeHashjoin.c',

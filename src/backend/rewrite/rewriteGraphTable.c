@@ -25,6 +25,7 @@
 #include "catalog/pg_propgraph_property.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
+#include "optimizer/cost.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/optimizer.h"
 #include "parser/analyze.h"
@@ -38,10 +39,12 @@
 #include "rewrite/rewriteGraphTable.h"
 #include "rewrite/rewriteHandler.h"
 #include "rewrite/rewriteManip.h"
+#include "rewrite/rowsecurity.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
+#include "utils/rls.h"
 #include "utils/ruleutils.h"
 #include "utils/syscache.h"
 
@@ -105,6 +108,10 @@ static Node *get_element_property_expr(Oid elemoid, Oid propoid, int rtindex);
 /*
  * Convert GRAPH_TABLE clause into a subquery using relational
  * operators.
+ *
+ * If enable_native_graphtable is true (the default), the rewriting is
+ * bypassed and the RTE_GRAPH_TABLE is left intact for the native
+ * graph executor to process.
  */
 Query *
 rewriteGraphTable(Query *parsetree, int rt_index)
@@ -115,6 +122,25 @@ rewriteGraphTable(Query *parsetree, int rt_index)
 	List	   *pathqueries = NIL;
 
 	rte = rt_fetch(rt_index, parsetree->rtable);
+
+	/* Native mode: leave RTE_GRAPH_TABLE intact for the planner */
+	if (enable_native_graphtable)
+	{
+		/*
+		 * Any element table that has (or may have) RLS enabled must make the
+		 * plan depend on the environment (role / row_security GUC).  Set it
+		 * here, at rewrite time, so plancache registers dependsOnRLS, exactly
+		 * like get_row_security_policies does for regular relations.  The
+		 * per-element RLS decision is shared with the native graph planner
+		 * (graph_has_row_security).  This rewrite-time call only feeds the
+		 * plancache dependsOnRLS flag; the planner independently enumerates
+		 * the per-table quals.
+		 */
+		if (graph_has_row_security(rte->relid))
+			parsetree->hasRowSecurity = true;
+
+		return parsetree;
+	}
 
 	Assert(list_length(rte->graph_pattern->path_pattern_list) == 1);
 
@@ -824,72 +850,6 @@ create_pe_for_element(struct path_factor *pf, Oid elemoid)
 }
 
 /*
- * Returns the list of OIDs of graph labels which the given label expression
- * resolves to in the given property graph.
- */
-static List *
-get_labels_for_expr(Oid propgraphid, Node *labelexpr)
-{
-	List	   *label_oids;
-
-	if (!labelexpr)
-	{
-		Relation	rel;
-		SysScanDesc scan;
-		ScanKeyData key[1];
-		HeapTuple	tup;
-
-		/*
-		 * According to section 9.2 "Contextual inference of a set of labels"
-		 * subclause 2.a.ii of SQL/PGQ standard, element pattern which does
-		 * not have a label expression is considered to have label expression
-		 * equivalent to '%|!%' which is set of all labels.
-		 */
-		label_oids = NIL;
-		rel = table_open(PropgraphLabelRelationId, AccessShareLock);
-		ScanKeyInit(&key[0],
-					Anum_pg_propgraph_label_pglpgid,
-					BTEqualStrategyNumber,
-					F_OIDEQ, ObjectIdGetDatum(propgraphid));
-		scan = systable_beginscan(rel, PropgraphLabelGraphNameIndexId,
-								  true, NULL, 1, key);
-		while (HeapTupleIsValid(tup = systable_getnext(scan)))
-		{
-			Form_pg_propgraph_label label = (Form_pg_propgraph_label) GETSTRUCT(tup);
-
-			label_oids = lappend_oid(label_oids, label->oid);
-		}
-		systable_endscan(scan);
-		table_close(rel, AccessShareLock);
-	}
-	else if (IsA(labelexpr, GraphLabelRef))
-	{
-		GraphLabelRef *glr = castNode(GraphLabelRef, labelexpr);
-
-		label_oids = list_make1_oid(glr->labelid);
-	}
-	else if (IsA(labelexpr, BoolExpr))
-	{
-		BoolExpr   *be = castNode(BoolExpr, labelexpr);
-		List	   *label_exprs = be->args;
-
-		label_oids = NIL;
-		foreach_node(GraphLabelRef, glr, label_exprs)
-			label_oids = lappend_oid(label_oids, glr->labelid);
-	}
-	else
-	{
-		/*
-		 * should not reach here since gram.y will not generate a label
-		 * expression with other node types.
-		 */
-		elog(ERROR, "unsupported label expression node: %d", (int) nodeTag(labelexpr));
-	}
-
-	return label_oids;
-}
-
-/*
  * Return a list of all the graph elements that satisfy the graph element pattern
  * represented by the given path_factor `pf`.
  *
@@ -908,7 +868,9 @@ get_labels_for_expr(Oid propgraphid, Node *labelexpr)
 static List *
 get_path_elements_for_path_factor(Oid propgraphid, struct path_factor *pf)
 {
-	List	   *label_oids = get_labels_for_expr(propgraphid, pf->labelexpr);
+	List	   *label_oids = (pf->labelexpr == NULL) ?
+		get_graph_all_label_oids(propgraphid) :
+		get_label_oids_for_labelexpr(pf->labelexpr);
 	List	   *elem_oids_seen = NIL;
 	List	   *pf_elem_oids = NIL;
 	List	   *path_elements = NIL;

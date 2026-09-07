@@ -34,8 +34,11 @@
  */
 #include "postgres.h"
 
+#include "access/genam.h"
+#include "access/htup_details.h"
 #include "access/table.h"
 #include "catalog/pg_class.h"
+#include "catalog/pg_propgraph_element.h"
 #include "catalog/pg_type.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -567,6 +570,124 @@ get_row_security_policies(Query *root, RangeTblEntry *rte, int rt_index,
 	 * when necessary (eg: role changes)
 	 */
 	*hasRowSecurity = true;
+}
+
+/*
+ * get_graph_row_security_quals
+ *
+ * Build the SELECT row-security quals for a single relation, independently of
+ * any query/RTE, for the native graph executor.  Policies are taken from
+ * root_relid (the inheritance root on which pg_policy rows live); relid is
+ * the relation that will actually be scanned (it may be a partition/inherited
+ * leaf, whose own pg_policy rows are empty).
+ *
+ * The returned quals reference Vars with varno = target_varno (policy quals
+ * are written against their single relation as varno 1, which this routine
+ * rewrites to target_varno; the graph executor passes OUTER_VAR).
+ */
+List *
+get_graph_row_security_quals(Oid relid, Oid checkAsUser, Oid root_relid,
+							 Index target_varno, bool *applies, bool *env_dep)
+{
+	Oid			user_id = OidIsValid(checkAsUser) ? checkAsUser : GetUserId();
+	int			rls_status;
+	List	   *permissive_policies = NIL;
+	List	   *restrictive_policies = NIL;
+	List	   *security_quals = NIL;
+	bool		has_sublinks = false;
+	Relation	rel;
+
+	*applies = false;
+	*env_dep = false;
+
+	rls_status = check_enable_rls(relid, checkAsUser, false);
+
+	switch (rls_status)
+	{
+		case RLS_NONE:
+			return NIL;
+
+		case RLS_NONE_ENV:
+
+			/*
+			 * RLS is currently bypassed (e.g. row_security=off, BYPASSRLS, or
+			 * table owner without FORCE), but the decision depends on the
+			 * environment: mark env_dep so the plan is invalidated when the
+			 * role or row_security GUC changes.
+			 */
+			*env_dep = true;
+			return NIL;
+
+		case RLS_ENABLED:
+			break;
+
+		default:
+			elog(ERROR, "unrecognized RLS status: %d", rls_status);
+			break;
+	}
+
+	*applies = true;
+
+	rel = table_open(root_relid, AccessShareLock);
+	get_policies_for_relation(rel, CMD_SELECT, user_id,
+							  &permissive_policies, &restrictive_policies);
+	add_security_quals(target_varno,
+					   permissive_policies,
+					   restrictive_policies,
+					   &security_quals,
+					   &has_sublinks);
+	table_close(rel, AccessShareLock);
+
+	/*
+	 * add_security_quals produces permissive/restrictive quals with their
+	 * Vars already rewritten to target_varno; make sure the whole tree is
+	 * qualified against the right varno even where sublinks exist.
+	 */
+	if (security_quals != NIL)
+		setRuleCheckAsUser((Node *) security_quals, user_id);
+
+	return security_quals;
+}
+
+/*
+ * graph_has_row_security
+ *
+ * Scan the element (backing) tables of a property graph and report whether
+ * any of them has (or may have) row-level security enabled for the current
+ * user.  This is the shared RLS decision for native graph scans: the
+ * rewriter uses it to set Query.hasRowSecurity (so plancache registers
+ * dependsOnRLS), and the native graph planner uses it via
+ * collect_graph_rls_info, so the per-element check_enable_rls walk is
+ * computed once in one place.
+ */
+bool
+graph_has_row_security(Oid graph_oid)
+{
+	Relation	el_rel;
+	SysScanDesc el_scan;
+	HeapTuple	el_tup;
+
+	el_rel = table_open(PropgraphElementRelationId, AccessShareLock);
+	el_scan = systable_beginscan(el_rel, InvalidOid, false, NULL, 0, NULL);
+	while (HeapTupleIsValid(el_tup = systable_getnext(el_scan)))
+	{
+		Form_pg_propgraph_element elform =
+			(Form_pg_propgraph_element) GETSTRUCT(el_tup);
+
+		if (elform->pgepgid != graph_oid)
+			continue;
+
+		if (check_enable_rls(elform->pgerelid, InvalidOid, true) != RLS_NONE)
+		{
+			systable_endscan(el_scan);
+			table_close(el_rel, AccessShareLock);
+			return true;
+		}
+	}
+	systable_endscan(el_scan);
+	table_close(el_rel, AccessShareLock);
+
+	return false;
 }
 
 /*

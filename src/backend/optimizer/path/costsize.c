@@ -142,6 +142,7 @@ int			effective_cache_size = DEFAULT_EFFECTIVE_CACHE_SIZE;
 Cost		disable_cost = 1.0e10;
 
 int			max_parallel_workers_per_gather = 2;
+int			max_graph_stack_depth = 1000;
 
 bool		enable_seqscan = true;
 bool		enable_indexscan = true;
@@ -155,6 +156,7 @@ bool		enable_groupagg = true;
 bool		enable_nestloop = true;
 bool		enable_material = true;
 bool		enable_memoize = true;
+bool		enable_native_graphtable = true;
 bool		enable_mergejoin = true;
 bool		enable_hashjoin = true;
 bool		enable_gathermerge = true;

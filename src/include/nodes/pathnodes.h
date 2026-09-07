@@ -223,6 +223,17 @@ typedef struct PlannerGlobal
 	/* "flat" list of PartitionPruneInfos */
 	List	   *partPruneInfos;
 
+	/*
+	 * Backing-table relids whose SELECT RLS quals are currently being planned
+	 * for a native graph scan.  A policy qual may contain a GRAPH_TABLE query
+	 * whose backing tables are themselves subject to RLS, which would make
+	 * the planner recurse without bound while converting the policy sublinks
+	 * to SubPlans.  Recording the relid here lets the planner detect that
+	 * irreducible recursion and error out immediately rather than recursing
+	 * until the C stack is exhausted.
+	 */
+	List	   *graph_plan_rls_active pg_node_attr(read_write_ignore);
+
 	/* OIDs of relations the plan depends on */
 	List	   *relationOids;
 
@@ -2256,6 +2267,29 @@ typedef struct CustomPath
 	List	   *custom_private;
 	const struct CustomPathMethods *methods;
 } CustomPath;
+
+/*
+ * GraphPath represents a property graph scan plan path.
+ *
+ * The graph pattern is carried in the path and eventually placed in the
+ * GraphScan plan node.
+ */
+typedef struct GraphPath
+{
+	Path		path;
+	/* OID of the property graph */
+	Oid			graph_oid;
+	/* The graph pattern to evaluate */
+	struct GraphPattern *graph_pattern;
+
+	/*
+	 * Row-level security info computed at plan time: per backing-table SELECT
+	 * RLS quals (a list of GraphRLSQual, see get_graph_row_security_quals)
+	 * and the backing-table OIDs.
+	 */
+	List	   *rls_quals;
+	List	   *rls_element_oids;
+}			GraphPath;
 
 /*
  * AppendPath represents an Append plan, ie, successive execution of

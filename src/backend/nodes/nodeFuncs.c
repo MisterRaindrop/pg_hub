@@ -4938,6 +4938,9 @@ planstate_tree_walker_impl(PlanState *planstate,
 					return true;
 			}
 			break;
+		case T_GraphScan:
+			/* GraphScan has no special children beyond lefttree/righttree */
+			break;
 		default:
 			break;
 	}

@@ -1997,6 +1997,20 @@ AcquirePlannerLocks(List *stmt_list, bool acquire)
 /*
  * ScanQueryForLocks: recursively scan one Query for AcquirePlannerLocks.
  */
+/*
+ * Acquire or release a lock on the given relation, if its OID is valid.
+ */
+static void
+LockRelationOidIfValid(Oid relid, LOCKMODE lockmode, bool acquire)
+{
+	if (!OidIsValid(relid))
+		return;
+	if (acquire)
+		LockRelationOid(relid, lockmode);
+	else
+		UnlockRelationOid(relid, lockmode);
+}
+
 static void
 ScanQueryForLocks(Query *parsetree, bool acquire)
 {
@@ -2022,19 +2036,18 @@ ScanQueryForLocks(Query *parsetree, bool acquire)
 					UnlockRelationOid(rte->relid, rte->rellockmode);
 				break;
 
+			case RTE_GRAPH_TABLE:
+				/* Property graph RTE: lock the graph to keep it in place */
+				LockRelationOidIfValid(rte->relid, rte->rellockmode, acquire);
+				break;
+
 			case RTE_SUBQUERY:
 
 				/*
 				 * If this was a view or a property graph, must lock/unlock
 				 * it.
 				 */
-				if (OidIsValid(rte->relid))
-				{
-					if (acquire)
-						LockRelationOid(rte->relid, rte->rellockmode);
-					else
-						UnlockRelationOid(rte->relid, rte->rellockmode);
-				}
+				LockRelationOidIfValid(rte->relid, rte->rellockmode, acquire);
 				/* Recurse into subquery-in-FROM */
 				ScanQueryForLocks(rte->subquery, acquire);
 				break;

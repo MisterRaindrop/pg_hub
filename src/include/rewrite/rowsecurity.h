@@ -46,4 +46,40 @@ extern void get_row_security_policies(Query *root,
 									  List **securityQuals, List **withCheckOptions,
 									  bool *hasRowSecurity, bool *hasSubLinks);
 
+/*
+ * Build the SELECT row-security quals for a single relation, independently of
+ * any query/RTE, for use by the native graph executor.
+ *
+ * relid      : the (possibly leaf) relation that will actually be scanned
+ * checkAsUser: user to evaluate policies/BYPASSRLS/ownership for (InvalidOid =
+ *              GetUserId())
+ * root_relid : ultimate inheritance root whose policies apply (== relid for a
+ *              non-inherited relation; for a partition/inheritance child, its
+ *              ancestor that carries the pg_policy rows)
+ * target_varno: varno to which policy-qual Vars are mapped (policy quals are
+ *              written against a single relation, varno 1; the caller usually
+ *              passes OUTER_VAR)
+ *
+ * On return, *applies is true if RLS is active for relid (quals returned may
+ * be a default-deny Const false).  *env_dep is set true when RLS is currently
+ * bypassed but depends on the environment (role / row_security GUC), so the
+ * plan must be invalidated on environment change.
+ */
+extern List *get_graph_row_security_quals(Oid relid, Oid checkAsUser,
+										  Oid root_relid, Index target_varno,
+										  bool *applies, bool *env_dep);
+
+/*
+ * Determine whether any element (backing) table of the given property graph
+ * has (or may have) row-level security enabled for the current user.
+ *
+ * Scans pg_propgraph_element for the graph and calls check_enable_rls per
+ * element table, returning true if any is RLS-enabled or environment-
+ * dependent.  Shared by the rewriter (to set Query.hasRowSecurity so
+ * plancache registers dependsOnRLS) and the native graph planner
+ * (collect_graph_rls_info), so the RLS decision for a graph's elements is
+ * single-sourced.
+ */
+extern bool graph_has_row_security(Oid graph_oid);
+
 #endif							/* ROWSECURITY_H */
