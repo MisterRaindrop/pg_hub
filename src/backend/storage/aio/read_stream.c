@@ -1408,6 +1408,48 @@ read_stream_resume(ReadStream *stream)
 }
 
 /*
+ * Change the buffer access strategy used for reads from this stream, or pass
+ * NULL to stop using one.
+ *
+ * The stream must be idle.  Buffers acquired under the old strategy are
+ * tracked in its ring, and in-progress IOs still refer to it, so callers that
+ * need to abandon a strategy on a busy stream use read_stream_clear_strategy()
+ * instead.
+ *
+ * The pin limit was derived from the strategy when the stream was created, so
+ * recompute it here.  The single allocation made at that point cannot grow, so
+ * the new limit stays capped by what was allocated.
+ */
+void
+read_stream_set_strategy(ReadStream *stream, BufferAccessStrategy strategy)
+{
+	Assert(stream->pinned_buffers == 0);
+	Assert(stream->ios_in_progress == 0);
+	Assert(stream->pending_read_nblocks == 0);
+
+	for (int i = 0; i < stream->max_ios; ++i)
+		stream->ios[i].op.strategy = strategy;
+
+	stream->max_pinned_buffers = Max(1,
+									 Min(stream->queue_size - 1,
+										 GetAccessStrategyPinLimit(strategy)));
+
+	/*
+	 * The look-ahead distances are only clamped as they grow, so a limit that
+	 * just shrank has to be applied to them here, including the distances
+	 * saved for resuming a paused stream.
+	 */
+	stream->readahead_distance = Min(stream->readahead_distance,
+									 stream->max_pinned_buffers);
+	stream->combine_distance = Min(stream->combine_distance,
+								   stream->max_pinned_buffers);
+	stream->resume_readahead_distance = Min(stream->resume_readahead_distance,
+											stream->max_pinned_buffers);
+	stream->resume_combine_distance = Min(stream->resume_combine_distance,
+										  stream->max_pinned_buffers);
+}
+
+/*
  * Stop using a buffer access strategy for reads from this stream.
  *
  * This clears the strategy for all of the stream's ReadBuffersOperations,
