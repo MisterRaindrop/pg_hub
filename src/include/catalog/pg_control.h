@@ -22,7 +22,7 @@
 
 
 /* Version identifier for this pg_control format */
-#define PG_CONTROL_VERSION	1903
+#define PG_CONTROL_VERSION	2000
 
 /* Nonce key length, see below */
 #define MOCK_AUTH_NONCE_LEN		32
@@ -223,7 +223,6 @@ typedef struct ControlFileData
 	uint32		nameDataLen;	/* catalog name field width */
 	uint32		indexMaxKeys;	/* max number of columns in an index */
 
-	uint32		toast_max_chunk_size;	/* chunk size in TOAST tables */
 	uint32		loblksize;		/* chunk size in pg_largeobject */
 
 	bool		float8ByVal;	/* float8, int8, etc pass-by-value? */

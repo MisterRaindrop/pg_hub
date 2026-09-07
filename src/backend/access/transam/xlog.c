@@ -48,7 +48,6 @@
 
 #include "access/clog.h"
 #include "access/commit_ts.h"
-#include "access/heaptoast.h"
 #include "access/multixact.h"
 #include "access/rewriteheap.h"
 #include "access/subtrans.h"
@@ -4324,7 +4323,6 @@ WriteControlFile(void)
 	ControlFile->nameDataLen = NAMEDATALEN;
 	ControlFile->indexMaxKeys = INDEX_MAX_KEYS;
 
-	ControlFile->toast_max_chunk_size = TOAST_OID_MAX_CHUNK_SIZE;
 	ControlFile->loblksize = LOBLKSIZE;
 
 	ControlFile->float8ByVal = true;	/* vestigial */
@@ -4576,16 +4574,6 @@ ReadControlFile(void)
 						   " but the server was compiled with %s %d.",
 						   "INDEX_MAX_KEYS", ControlFile->indexMaxKeys,
 						   "INDEX_MAX_KEYS", INDEX_MAX_KEYS),
-				 errhint("It looks like you need to recompile or initdb.")));
-	if (ControlFile->toast_max_chunk_size != TOAST_OID_MAX_CHUNK_SIZE)
-		ereport(FATAL,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("database files are incompatible with server"),
-		/* translator: %s is a variable name and %d is its value */
-				 errdetail("The database cluster was initialized with %s %d,"
-						   " but the server was compiled with %s %d.",
-						   "TOAST_OID_MAX_CHUNK_SIZE", ControlFile->toast_max_chunk_size,
-						   "TOAST_OID_MAX_CHUNK_SIZE", (int) TOAST_OID_MAX_CHUNK_SIZE),
 				 errhint("It looks like you need to recompile or initdb.")));
 	if (ControlFile->loblksize != LOBLKSIZE)
 		ereport(FATAL,
