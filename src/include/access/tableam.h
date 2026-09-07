@@ -378,7 +378,8 @@ typedef struct TableAmRoutine
 								bool allow_sync, bool allow_pagemode);
 
 	/*
-	 * Return next tuple from `scan`, store in slot.
+	 * Return true if the next tuple from `scan` was stored in slot. A
+	 * successful call must leave slot non-empty.
 	 */
 	bool		(*scan_getnextslot) (TableScanDesc scan,
 									 ScanDirection direction,
@@ -1095,13 +1096,18 @@ table_rescan_set_params(TableScanDesc scan, ScanKeyData *key,
 static inline bool
 table_scan_getnextslot(TableScanDesc sscan, ScanDirection direction, TupleTableSlot *slot)
 {
+	bool		found;
+
 	slot->tts_tableOid = RelationGetRelid(sscan->rs_rd);
 
 	/* We don't expect actual scans using NoMovementScanDirection */
 	Assert(direction == ForwardScanDirection ||
 		   direction == BackwardScanDirection);
 
-	return sscan->rs_rd->rd_tableam->scan_getnextslot(sscan, direction, slot);
+	found = sscan->rs_rd->rd_tableam->scan_getnextslot(sscan, direction, slot);
+	pg_assume(!found || !TupIsNull(slot));
+
+	return found;
 }
 
 /* ----------------------------------------------------------------------------
