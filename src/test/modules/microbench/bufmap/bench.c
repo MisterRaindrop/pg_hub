@@ -110,13 +110,9 @@ run_bufmap_bench(int proc_id, int n_parallel, int rounds, int iterations,
 			{
 				BufferTag  *tag = &ptags[blks[i]];
 				uint32		hash;
-				LWLock	   *lock;
 
 				hash = BufTableHashCode(tag);
-				lock = BufMappingPartitionLock(hash);
-				group_id = LWLockAcquire(lock, LW_EXCLUSIVE) ? 0 : 1;
 				sink += BufTableInsert(tag, hash, (Buffer)bufids[i]);
-				LWLockRelease(lock);
 			}
 		END_GROUPED_TIMING;
 
@@ -124,13 +120,9 @@ run_bufmap_bench(int proc_id, int n_parallel, int rounds, int iterations,
 			{
 				BufferTag  *tag = &ptags[blks[i]];
 				uint32		hash;
-				LWLock	   *lock;
 
 				hash = BufTableHashCode(tag);
-				lock = BufMappingPartitionLock(hash);
-				group_id = LWLockAcquire(lock, LW_SHARED) ? 0 : 1;
 				BufTableLookup(tag, hash);
-				LWLockRelease(lock);
 			}
 		END_GROUPED_TIMING;
 
@@ -138,13 +130,9 @@ run_bufmap_bench(int proc_id, int n_parallel, int rounds, int iterations,
 			{
 				BufferTag  *tag = &atags[blks[i]];
 				uint32		hash;
-				LWLock	   *lock;
 
 				hash = BufTableHashCode(tag);
-				lock = BufMappingPartitionLock(hash);
-				group_id = LWLockAcquire(lock, LW_SHARED) ? 0 : 1;
 				BufTableLookup(tag, hash);
-				LWLockRelease(lock);
 			}
 		END_GROUPED_TIMING;
 
