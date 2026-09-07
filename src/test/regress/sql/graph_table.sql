@@ -91,7 +91,6 @@ SELECT customer_name FROM GRAPH_TABLE (myshop MATCH (c IS customers|employees WH
 SELECT customer_name FROM GRAPH_TABLE (myshop MATCH (c IS customers WHERE c.address = 'US')-[IS customer_orders] COLUMNS (c.name AS customer_name));  -- error
 SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers), (o IS orders) COLUMNS (c.name AS customer_name));  -- error
 SELECT * FROM GRAPH_TABLE (myshop MATCH COLUMNS (1 AS col));  -- error, empty match clause
-SELECT customer_name FROM GRAPH_TABLE (myshop MATCH (c IS customers)->{1,2}(o IS orders) COLUMNS (c.name AS customer_name));  -- error
 SELECT customer_name FROM GRAPH_TABLE (myshop MATCH (c IS customers WHERE c.name) COLUMNS (c.name AS customer_name));  -- error, WHERE must yield boolean
 SELECT customer_name FROM GRAPH_TABLE (myshop MATCH (c IS customers) WHERE c.customer_id COLUMNS (c.name AS customer_name));  -- error, WHERE must yield boolean
 SELECT * FROM GRAPH_TABLE (myshop MATCH ((c IS customers)->(o IS orders)) COLUMNS (c.name));
@@ -139,6 +138,11 @@ SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers) COLUMNS (c.name));
 -- unknown type resolution
 SELECT *, pg_typeof(unknown_col) AS unknown_col_type, pg_typeof(null_col) AS null_col_type FROM GRAPH_TABLE (myshop MATCH (c IS customers) COLUMNS (c.name, 'unknown-literal' AS unknown_col, NULL AS null_col));
 SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers WHERE c.address = 'US')-[IS customer_orders]->(o IS orders) COLUMNS (c.name));
+-- property refs under IS [NOT] NULL in element WHERE clauses
+SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers WHERE c.address IS NOT NULL)-[IS customer_orders]->(o IS orders) COLUMNS (c.name));
+SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers WHERE c.address IS NULL)-[IS customer_orders]->(o IS orders) COLUMNS (c.name));
+-- property ref under IS NOT NULL in a graph-level WHERE clause
+SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers)-[IS customer_orders]->(o IS orders) WHERE c.address IS NOT NULL COLUMNS (c.name));
 -- graph element specification without label or variable
 SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers WHERE c.address = 'US')-[]->(o IS orders) COLUMNS (c.name AS customer_name));
 SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers)-[co IS customer_orders]->(o IS orders WHERE o.ordered_when = date '2024-01-02') COLUMNS (c.name, c.address));
@@ -289,10 +293,10 @@ SELECT count(*) FROM GRAPH_TABLE (g1 MATCH ()->() COLUMNS (1 AS one));
 -- of label vl2.
 SELECT * FROM GRAPH_TABLE (g1 MATCH (a IS vl1 | vl2) COLUMNS (a.vname, a.vprop1));
 -- vprop2 is associated with vl2 but not vl3
-SELECT src, conn, dest, lprop1, vprop2, vprop1 FROM GRAPH_TABLE (g1 MATCH (a IS vl1)-[b IS el1]->(c IS vl2 | vl3) COLUMNS (a.vname AS src, b.ename AS conn, c.vname AS dest, c.lprop1, c.vprop2, c.vprop1));
+SELECT src, conn, dest, lprop1, vprop2, vprop1 FROM GRAPH_TABLE (g1 MATCH (a IS vl1)-[b IS el1]->(c IS vl2 | vl3) COLUMNS (a.vname AS src, b.ename AS conn, c.vname AS dest, c.lprop1, c.vprop2, c.vprop1)) ORDER BY src, conn, dest;
 -- edges directed in both ways - to and from v2
-SELECT * FROM GRAPH_TABLE (g1 MATCH (v1 IS vl2)-[conn]-(v2) COLUMNS (v1.vname AS v1name, conn.ename AS cname, v2.vname AS v2name));
-SELECT * FROM GRAPH_TABLE (g1 MATCH (v1 IS vl2)-(v2) COLUMNS (v1.vname AS v1name, v2.vname AS v2name));
+SELECT * FROM GRAPH_TABLE (g1 MATCH (v1 IS vl2)-[conn]-(v2) COLUMNS (v1.vname AS v1name, conn.ename AS cname, v2.vname AS v2name)) ORDER BY v1name, v2name;
+SELECT * FROM GRAPH_TABLE (g1 MATCH (v1 IS vl2)-(v2) COLUMNS (v1.vname AS v1name, v2.vname AS v2name)) ORDER BY v1name, v2name;
 
 -- Errors
 -- vl1 is not associated with property vprop2
@@ -325,15 +329,15 @@ SELECT * FROM GRAPH_TABLE (g1 MATCH (WHERE b.eprop1 = 10001)-[b]->(c) COLUMNS (b
 
 -- select all the properties across all the labels associated with a given type
 -- of graph element
-SELECT * FROM GRAPH_TABLE (g1 MATCH (src)-[conn]->(dest) COLUMNS (src.vname AS svname, conn.ename AS cename, dest.vname AS dvname, src.vprop1 AS svp1, src.vprop2 AS svp2, src.lprop1 AS slp1, dest.vprop1 AS dvp1, dest.vprop2 AS dvp2, dest.lprop1 AS dlp1, conn.eprop1 AS cep1, conn.lprop2 AS clp2));
+SELECT * FROM GRAPH_TABLE (g1 MATCH (src)-[conn]->(dest) COLUMNS (src.vname AS svname, conn.ename AS cename, dest.vname AS dvname, src.vprop1 AS svp1, src.vprop2 AS svp2, src.lprop1 AS slp1, dest.vprop1 AS dvp1, dest.vprop2 AS dvp2, dest.lprop1 AS dlp1, conn.eprop1 AS cep1, conn.lprop2 AS clp2)) ORDER BY svname, cename;
 -- three label disjunction
-SELECT * FROM GRAPH_TABLE (g1 MATCH (src IS vl1 | vl2 | vl3)-[conn]->(dest) COLUMNS (src.vname AS svname, conn.ename AS cename, dest.vname AS dvname));
+SELECT * FROM GRAPH_TABLE (g1 MATCH (src IS vl1 | vl2 | vl3)-[conn]->(dest) COLUMNS (src.vname AS svname, conn.ename AS cename, dest.vname AS dvname)) ORDER BY svname, cename;
 -- graph'ical query: find a vertex which is not connected to any other vertex as a source or a destination.
 WITH all_connected_vertices AS (SELECT svn, dvn FROM GRAPH_TABLE (g1 MATCH (src)-[conn]->(dest) COLUMNS (src.vname AS svn, dest.vname AS dvn))),
     all_vertices AS (SELECT vn FROM GRAPH_TABLE (g1 MATCH (vertex) COLUMNS (vertex.vname AS vn)))
 SELECT vn FROM all_vertices EXCEPT (SELECT svn FROM all_connected_vertices UNION SELECT dvn FROM all_connected_vertices) ORDER BY vn;
 -- query all connections using a label shared by vertices and edges
-SELECT sn, cn, dn FROM GRAPH_TABLE (g1 MATCH (src IS l1)-[conn IS l1]->(dest IS l1) COLUMNS (src.elname AS sn, conn.elname AS cn, dest.elname AS dn));
+SELECT sn, cn, dn FROM GRAPH_TABLE (g1 MATCH (src IS l1)-[conn IS l1]->(dest IS l1) COLUMNS (src.elname AS sn, conn.elname AS cn, dest.elname AS dn)) ORDER BY sn, cn;
 
 -- Tests for cyclic path patterns
 CREATE TABLE e2_1 (
@@ -638,6 +642,16 @@ SELECT src.vname, count(*) FROM v1 AS src
   GROUP BY src.vname
   HAVING count(*) >= (SELECT count(*) FROM GRAPH_TABLE (g1 MATCH (a IS vl1 | vl2) COLUMNS (a.vname AS n)) WHERE n = src.vname)
   ORDER BY vname;
+
+ALTER PROPERTY GRAPH g1 DROP EDGE TABLES (e3_3); -- simplify the graph
+-- VLE (Variable-Length Edge) patterns
+SELECT src FROM GRAPH_TABLE (g1 MATCH (a)->{0}() COLUMNS (a.vname AS src)) ORDER BY src;
+SELECT src, dst FROM GRAPH_TABLE (g1 MATCH (a)->{2}(b) COLUMNS (a.vname AS src, b.vname AS dst)) ORDER BY src, dst;
+SELECT src, dst FROM GRAPH_TABLE (g1 MATCH (a)->{1,3}(b) COLUMNS (a.vname AS src, b.vname AS dst)) ORDER BY src, dst;
+SELECT src, dst FROM GRAPH_TABLE (g1 MATCH (a)->{2,}(b) COLUMNS (a.vname AS src, b.vname AS dst)) ORDER BY src, dst; -- depth error
+SELECT src, dst FROM GRAPH_TABLE (g1 MATCH (a)->{,2}(b) COLUMNS (a.vname AS src, b.vname AS dst)) ORDER BY src, dst;
+SELECT src, dst FROM GRAPH_TABLE (g1 MATCH (a)->{,2}(b)->(c) COLUMNS (a.vname AS src, c.vname AS dst)) ORDER BY src, dst;
+SELECT src, dst FROM GRAPH_TABLE (g1 MATCH (a)-[e]-{2}(b) COLUMNS (a.vname AS src, b.vname AS dst)) ORDER BY src, dst;
 
 -- Locking clause on GRAPH_TABLE
 SELECT * FROM GRAPH_TABLE (g1 MATCH (src IS vl1) COLUMNS (src.vname)) gt FOR UPDATE OF gt;  -- not supported

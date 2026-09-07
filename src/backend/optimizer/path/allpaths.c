@@ -20,9 +20,19 @@
 
 #include "access/sysattr.h"
 #include "access/tsmapi.h"
+#include "access/genam.h"
+#include "access/table.h"
+#include "access/htup_details.h"
+#include "utils/syscache.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_proc.h"
+#include "catalog/pg_propgraph_element.h"
+#include "catalog/pg_propgraph_element_label.h"
+#include "catalog/partition.h"
+#include "rewrite/rewriteHandler.h"
+#include "rewrite/rowsecurity.h"
+#include "utils/rls.h"
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -43,6 +53,7 @@
 #include "optimizer/prep.h"
 #include "optimizer/tlist.h"
 #include "parser/parse_clause.h"
+#include "parser/parse_graphtable.h"
 #include "parser/parsetree.h"
 #include "partitioning/partbounds.h"
 #include "port/pg_bitutils.h"
@@ -149,6 +160,10 @@ static void set_result_pathlist(PlannerInfo *root, RelOptInfo *rel,
 								RangeTblEntry *rte);
 static void set_worktable_pathlist(PlannerInfo *root, RelOptInfo *rel,
 								   RangeTblEntry *rte);
+static void set_graph_pathlist(PlannerInfo *root, RelOptInfo *rel,
+							   RangeTblEntry *rte);
+static void collect_graph_rls_info(PlannerInfo *root, RangeTblEntry *rte,
+								   GraphPath * gpath);
 static RelOptInfo *make_rel_from_joinlist(PlannerInfo *root, List *joinlist);
 static bool subquery_is_pushdown_safe(Query *subquery, Query *topquery,
 									  pushdown_safety_info *safetyInfo);
@@ -500,6 +515,14 @@ set_rel_size(PlannerInfo *root, RelOptInfo *rel,
 				/* Might as well just build the path immediately */
 				set_result_pathlist(root, rel, rte);
 				break;
+			case RTE_GRAPH_TABLE:
+				if (enable_native_graphtable)
+				{
+					set_plain_rel_size(root, rel, rte);
+					break;
+				}
+				elog(ERROR, "unexpected rtekind: %d", (int) rel->rtekind);
+				break;
 			default:
 				elog(ERROR, "unexpected rtekind: %d", (int) rel->rtekind);
 				break;
@@ -573,6 +596,14 @@ set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 				break;
 			case RTE_RESULT:
 				/* simple Result --- fully handled during set_rel_size */
+				break;
+			case RTE_GRAPH_TABLE:
+				if (enable_native_graphtable)
+				{
+					set_graph_pathlist(root, rel, rte);
+					break;
+				}
+				elog(ERROR, "unexpected rtekind: %d", (int) rel->rtekind);
 				break;
 			default:
 				elog(ERROR, "unexpected rtekind: %d", (int) rel->rtekind);
@@ -793,12 +824,14 @@ set_rel_consider_parallel(PlannerInfo *root, RelOptInfo *rel,
 			break;
 
 		case RTE_GRAPH_TABLE:
-
-			/*
-			 * Shouldn't happen since these are replaced by subquery RTEs when
-			 * rewriting queries.
-			 */
-			Assert(false);
+			if (enable_native_graphtable)
+			{
+				set_plain_rel_size(root, rel, rte);
+				break;
+			}
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("native graph table execution is disabled")));
 			return;
 
 		case RTE_GROUP:
@@ -3233,6 +3266,270 @@ set_worktable_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 
 	/* Generate appropriate path */
 	add_path(rel, create_worktablescan_path(root, rel, required_outer));
+}
+
+void
+set_graph_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
+{
+	GraphPath  *gpath = makeNode(GraphPath);
+	Relids		required_outer = NULL;
+
+	gpath->path.pathtype = T_GraphScan;
+	gpath->path.parent = rel;
+	gpath->path.pathtarget = rel->reltarget;
+	gpath->path.rows = rel->rows;
+	gpath->path.startup_cost = 0;
+	gpath->path.total_cost = rel->rows * cpu_tuple_cost;
+	gpath->path.pathkeys = NIL;
+	gpath->graph_oid = rte->relid;
+	gpath->graph_pattern = rte->graph_pattern;
+
+	/*
+	 * If the element WHERE clauses reference outer relations (LATERAL
+	 * references), create a parameterized path so the planner orders the
+	 * NestLoop correctly.
+	 */
+	if (rte->graph_pattern != NULL)
+	{
+		List	   *path_term = linitial(rte->graph_pattern->path_pattern_list);
+		ListCell   *lc;
+
+		/*
+		 * path_pattern_list is a list of path terms, each of which is a list
+		 * of GraphElementPattern nodes.  Only the first path term is used by
+		 * the native executor.
+		 */
+		foreach(lc, path_term)
+		{
+			GraphElementPattern *gep = lfirst_node(GraphElementPattern, lc);
+
+			if (gep->whereClause)
+			{
+				Bitmapset  *varnos = pull_varnos(root, (Node *) gep->whereClause);
+
+				if (!bms_is_empty(varnos))
+					required_outer = bms_add_members(required_outer, varnos);
+				bms_free(varnos);
+			}
+			if (gep->subexpr)
+			{
+				ListCell   *slc;
+
+				foreach(slc, gep->subexpr)
+				{
+					Bitmapset  *varnos = pull_varnos(root, (Node *) lfirst(slc));
+
+					if (!bms_is_empty(varnos))
+						required_outer = bms_add_members(required_outer, varnos);
+					bms_free(varnos);
+				}
+			}
+		}
+		if (rte->graph_pattern->whereClause)
+		{
+			Bitmapset  *varnos = pull_varnos(root, (Node *) rte->graph_pattern->whereClause);
+
+			if (!bms_is_empty(varnos))
+				required_outer = bms_add_members(required_outer, varnos);
+			bms_free(varnos);
+		}
+	}
+
+	/* Never let the scan's own relid count as an outer reference */
+	required_outer = bms_del_member(required_outer, rel->relid);
+
+	if (!bms_is_empty(required_outer))
+	{
+		ParamPathInfo *param_info;
+
+		param_info = get_baserel_parampathinfo(root, rel, required_outer);
+		gpath->path.param_info = param_info;
+		gpath->path.rows = param_info->ppi_rows;
+	}
+
+	/* Attach plan-time row-security info for the element tables */
+	collect_graph_rls_info(root, rte, gpath);
+
+	add_path(rel, (Path *) gpath);
+}
+
+/*
+ * Plan-time helper: does the given catalog element carry any of the labels
+ * referenced by the pattern element's label expression (OR semantics)?
+ * Membership is tested via the syscache; the label-expression traversal is
+ * shared with the executor (graph_label_expr_matches).
+ */
+static bool
+graph_element_has_label_syscache(Oid labelid, void *arg)
+{
+	Oid			elemoid = *((Oid *) arg);
+
+	return SearchSysCacheExists2(PROPGRAPHELEMENTLABELELEMENTLABEL,
+								 ObjectIdGetDatum(elemoid),
+								 ObjectIdGetDatum(labelid));
+}
+
+static bool
+graph_element_matches_label(Oid elemoid, Node *labelexpr)
+{
+	return graph_label_expr_matches(labelexpr,
+									graph_element_has_label_syscache,
+									&elemoid);
+}
+
+/*
+ * Plan-time row-security collection for a graph scan.
+ *
+ * Enumerates the backing tables the graph scan may touch (matching each
+ * pattern element's kind and label expression), determines the row-security
+ * state for each table for the current user, and records:
+ *   - gpath->rls_quals: per-table SELECT RLS quals (Vars on OUTER_VAR)
+ *   - gpath->rls_element_oids: backing-table OIDs (for dependency tracking)
+ * Also marks the query as row-security dependent when needed, and registers
+ * the backing tables as plan dependencies so ALTER POLICY / RLS toggles
+ * invalidate cached plans.
+ */
+
+/*
+ * Lock the relations referenced by the SubLinks in the RLS quals, like the
+ * rewriter does for securityQuals (rewriteHandler.c), so that the policy
+ * subqueries can be planned (AcquireRewriteLocks on their subselects).
+ */
+static bool
+lock_rls_quals_walker(Node *node, void *context)
+{
+	if (node == NULL)
+		return false;
+	if (IsA(node, SubLink))
+	{
+		SubLink    *sub = (SubLink *) node;
+
+		AcquireRewriteLocks((Query *) sub->subselect, false, false);
+		return false;			/* AcquireRewriteLocks handled sub-sublinks */
+	}
+	return expression_tree_walker(node, lock_rls_quals_walker, context);
+}
+
+static void
+collect_graph_rls_info(PlannerInfo *root, RangeTblEntry *rte, GraphPath * gpath)
+{
+	Query	   *parse = root->parse;
+	Oid			graph_oid = gpath->graph_oid;
+	List	   *path_terms = NIL;
+	List	   *rls_quals = NIL;
+	List	   *rls_element_oids = NIL;
+	ListCell   *lc;
+
+	if (rte->graph_pattern == NULL ||
+		rte->graph_pattern->path_pattern_list == NIL)
+		return;
+
+	path_terms = linitial(rte->graph_pattern->path_pattern_list);
+
+	foreach(lc, path_terms)
+	{
+		GraphElementPattern *gep = lfirst_node(GraphElementPattern, lc);
+		char		need_kind;
+		Relation	el_rel;
+		SysScanDesc el_scan;
+		HeapTuple	el_tup;
+
+		if (gep == NULL)
+			continue;
+		if (!graph_element_kind_info(gep->kind, &need_kind, NULL))
+			continue;
+
+		/*
+		 * Enumerate catalog elements of this graph with the required kind and
+		 * matching label expression.  Duplicate backing tables (e.g. multi-
+		 * label) are deduplicated below.
+		 */
+		el_rel = table_open(PropgraphElementRelationId, AccessShareLock);
+		el_scan = systable_beginscan(el_rel, InvalidOid, false, NULL, 0, NULL);
+		while (HeapTupleIsValid(el_tup = systable_getnext(el_scan)))
+		{
+			Form_pg_propgraph_element elform =
+				(Form_pg_propgraph_element) GETSTRUCT(el_tup);
+			Oid			relid;
+			List	   *qual;
+
+			if (elform->pgepgid != graph_oid)
+				continue;
+			if (elform->pgekind != need_kind)
+				continue;
+			if (!graph_element_matches_label(elform->oid, gep->labelexpr))
+				continue;
+
+			relid = elform->pgerelid;
+			if (list_member_oid(rls_element_oids, relid))
+				continue;
+
+			rls_element_oids = lappend_oid(rls_element_oids, relid);
+
+			/*
+			 * Collect SELECT RLS quals for this backing table.  Use the
+			 * topmost inheritance root (for partitioned/inherited tables the
+			 * policies live on the root; see get_row_security_policies).
+			 */
+			{
+				List	   *ancestors = get_partition_ancestors(relid);
+				Oid			root_relid = relid;
+				bool		applies = false;
+				bool		env_dep = false;
+
+				if (ancestors != NIL)
+					root_relid = llast_oid(ancestors);
+
+				qual = get_graph_row_security_quals(relid, InvalidOid,
+													root_relid, OUTER_VAR,
+													&applies, &env_dep);
+				if (applies)
+				{
+					/*
+					 * Store as a GraphRLSQual so the executor can match the
+					 * backing table and compile the quals.
+					 */
+					GraphRLSQual *rlsq = makeNode(GraphRLSQual);
+
+					rlsq->relid = relid;
+					rlsq->quals = qual;
+					rls_quals = lappend(rls_quals, rlsq);
+				}
+			}
+		}
+		systable_endscan(el_scan);
+		table_close(el_rel, AccessShareLock);
+	}
+
+	gpath->rls_quals = rls_quals;
+	gpath->rls_element_oids = rls_element_oids;
+
+	/*
+	 * If any backing table is (or may be) subject to RLS, make the plan
+	 * depend on the environment (role / row_security GUC) and on the backing
+	 * tables themselves, so cached plans are invalidated when policies
+	 * change.  The per-element RLS decision is shared with the rewriter
+	 * (graph_has_row_security), so the check_enable_rls walk is
+	 * single-sourced.
+	 */
+	if (graph_has_row_security(graph_oid))
+		parse->hasRowSecurity = true;
+	foreach(lc, rls_element_oids)
+		root->glob->relationOids = lappend_oid(root->glob->relationOids,
+											   lfirst_oid(lc));
+
+	/*
+	 * Lock the relations referenced by RLS-qual subqueries (policy USING
+	 * clauses may contain SubLinks), mirroring what the rewriter does for
+	 * securityQuals, so they can be planned later.
+	 */
+	foreach(lc, rls_quals)
+	{
+		GraphRLSQual *rlsq = lfirst_node(GraphRLSQual, lc);
+
+		(void) expression_tree_walker((Node *) rlsq->quals,
+									  lock_rls_quals_walker, NULL);
+	}
 }
 
 /*

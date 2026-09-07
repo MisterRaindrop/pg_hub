@@ -99,8 +99,6 @@ SELECT * FROM GRAPH_TABLE (myshop MATCH COLUMNS (1 AS col));  -- error, empty ma
 ERROR:  syntax error at or near "COLUMNS"
 LINE 1: SELECT * FROM GRAPH_TABLE (myshop MATCH COLUMNS (1 AS col));
                                                 ^
-SELECT customer_name FROM GRAPH_TABLE (myshop MATCH (c IS customers)->{1,2}(o IS orders) COLUMNS (c.name AS customer_name));  -- error
-ERROR:  element pattern quantifier is not supported
 SELECT customer_name FROM GRAPH_TABLE (myshop MATCH (c IS customers WHERE c.name) COLUMNS (c.name AS customer_name));  -- error, WHERE must yield boolean
 ERROR:  argument of WHERE must be type boolean, not type character varying
 SELECT customer_name FROM GRAPH_TABLE (myshop MATCH (c IS customers) WHERE c.customer_id COLUMNS (c.name AS customer_name));  -- error, WHERE must yield boolean
@@ -178,6 +176,27 @@ SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers WHERE c.address = 'US')-
 -----------
  customer1
 (1 row)
+
+-- property refs under IS [NOT] NULL in element WHERE clauses
+SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers WHERE c.address IS NOT NULL)-[IS customer_orders]->(o IS orders) COLUMNS (c.name));
+   name    
+-----------
+ customer1
+ customer2
+(2 rows)
+
+SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers WHERE c.address IS NULL)-[IS customer_orders]->(o IS orders) COLUMNS (c.name));
+ name 
+------
+(0 rows)
+
+-- property ref under IS NOT NULL in a graph-level WHERE clause
+SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers)-[IS customer_orders]->(o IS orders) WHERE c.address IS NOT NULL COLUMNS (c.name));
+   name    
+-----------
+ customer1
+ customer2
+(2 rows)
 
 -- graph element specification without label or variable
 SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers WHERE c.address = 'US')-[]->(o IS orders) COLUMNS (c.name AS customer_name));
@@ -424,17 +443,17 @@ SELECT * FROM GRAPH_TABLE (g1 MATCH (a IS vl1 | vl2) COLUMNS (a.vname, a.vprop1)
 (6 rows)
 
 -- vprop2 is associated with vl2 but not vl3
-SELECT src, conn, dest, lprop1, vprop2, vprop1 FROM GRAPH_TABLE (g1 MATCH (a IS vl1)-[b IS el1]->(c IS vl2 | vl3) COLUMNS (a.vname AS src, b.ename AS conn, c.vname AS dest, c.lprop1, c.vprop2, c.vprop1));
+SELECT src, conn, dest, lprop1, vprop2, vprop1 FROM GRAPH_TABLE (g1 MATCH (a IS vl1)-[b IS el1]->(c IS vl2 | vl3) COLUMNS (a.vname AS src, b.ename AS conn, c.vname AS dest, c.lprop1, c.vprop2, c.vprop1)) ORDER BY src, conn, dest;
  src | conn | dest |  lprop1  | vprop2 | vprop1 
 -----+------+------+----------+--------+--------
- v12 | e122 | v21  | vl2_prop |   1100 |   1010
  v11 | e121 | v22  | vl2_prop |   1200 |   1020
  v11 | e131 | v33  | vl3_prop |        |   2030
  v11 | e132 | v31  | vl3_prop |        |   2010
+ v12 | e122 | v21  | vl2_prop |   1100 |   1010
 (4 rows)
 
 -- edges directed in both ways - to and from v2
-SELECT * FROM GRAPH_TABLE (g1 MATCH (v1 IS vl2)-[conn]-(v2) COLUMNS (v1.vname AS v1name, conn.ename AS cname, v2.vname AS v2name));
+SELECT * FROM GRAPH_TABLE (g1 MATCH (v1 IS vl2)-[conn]-(v2) COLUMNS (v1.vname AS v1name, conn.ename AS cname, v2.vname AS v2name)) ORDER BY v1name, v2name;
  v1name | cname | v2name 
 --------+-------+--------
  v21    | e122  | v12
@@ -442,7 +461,7 @@ SELECT * FROM GRAPH_TABLE (g1 MATCH (v1 IS vl2)-[conn]-(v2) COLUMNS (v1.vname AS
  v22    | e231  | v32
 (3 rows)
 
-SELECT * FROM GRAPH_TABLE (g1 MATCH (v1 IS vl2)-(v2) COLUMNS (v1.vname AS v1name, v2.vname AS v2name));
+SELECT * FROM GRAPH_TABLE (g1 MATCH (v1 IS vl2)-(v2) COLUMNS (v1.vname AS v1name, v2.vname AS v2name)) ORDER BY v1name, v2name;
  v1name | v2name 
 --------+--------
  v21    | v12
@@ -511,24 +530,24 @@ LINE 1: SELECT * FROM GRAPH_TABLE (g1 MATCH (WHERE b.eprop1 = 10001)...
                                                    ^
 -- select all the properties across all the labels associated with a given type
 -- of graph element
-SELECT * FROM GRAPH_TABLE (g1 MATCH (src)-[conn]->(dest) COLUMNS (src.vname AS svname, conn.ename AS cename, dest.vname AS dvname, src.vprop1 AS svp1, src.vprop2 AS svp2, src.lprop1 AS slp1, dest.vprop1 AS dvp1, dest.vprop2 AS dvp2, dest.lprop1 AS dlp1, conn.eprop1 AS cep1, conn.lprop2 AS clp2));
+SELECT * FROM GRAPH_TABLE (g1 MATCH (src)-[conn]->(dest) COLUMNS (src.vname AS svname, conn.ename AS cename, dest.vname AS dvname, src.vprop1 AS svp1, src.vprop2 AS svp2, src.lprop1 AS slp1, dest.vprop1 AS dvp1, dest.vprop2 AS dvp2, dest.lprop1 AS dlp1, conn.eprop1 AS cep1, conn.lprop2 AS clp2)) ORDER BY svname, cename;
  svname | cename | dvname | svp1 | svp2 |   slp1   | dvp1 | dvp2 |   dlp1   | cep1  |  clp2  
 --------+--------+--------+------+------+----------+------+------+----------+-------+--------
- v12    | e122   | v21    |   20 |      |          | 1010 | 1100 | vl2_prop | 10002 |       
  v11    | e121   | v22    |   10 |      |          | 1020 | 1200 | vl2_prop | 10001 |       
  v11    | e131   | v33    |   10 |      |          | 2030 |      | vl3_prop | 10003 |       
  v11    | e132   | v31    |   10 |      |          | 2010 |      | vl3_prop | 10004 |       
+ v12    | e122   | v21    |   20 |      |          | 1010 | 1100 | vl2_prop | 10002 |       
  v22    | e231   | v32    | 1020 | 1200 | vl2_prop | 2020 |      | vl3_prop |       | 100050
 (5 rows)
 
 -- three label disjunction
-SELECT * FROM GRAPH_TABLE (g1 MATCH (src IS vl1 | vl2 | vl3)-[conn]->(dest) COLUMNS (src.vname AS svname, conn.ename AS cename, dest.vname AS dvname));
+SELECT * FROM GRAPH_TABLE (g1 MATCH (src IS vl1 | vl2 | vl3)-[conn]->(dest) COLUMNS (src.vname AS svname, conn.ename AS cename, dest.vname AS dvname)) ORDER BY svname, cename;
  svname | cename | dvname 
 --------+--------+--------
- v12    | e122   | v21
  v11    | e121   | v22
  v11    | e131   | v33
  v11    | e132   | v31
+ v12    | e122   | v21
  v22    | e231   | v32
 (5 rows)
 
@@ -543,13 +562,13 @@ SELECT vn FROM all_vertices EXCEPT (SELECT svn FROM all_connected_vertices UNION
 (2 rows)
 
 -- query all connections using a label shared by vertices and edges
-SELECT sn, cn, dn FROM GRAPH_TABLE (g1 MATCH (src IS l1)-[conn IS l1]->(dest IS l1) COLUMNS (src.elname AS sn, conn.elname AS cn, dest.elname AS dn));
+SELECT sn, cn, dn FROM GRAPH_TABLE (g1 MATCH (src IS l1)-[conn IS l1]->(dest IS l1) COLUMNS (src.elname AS sn, conn.elname AS cn, dest.elname AS dn)) ORDER BY sn, cn;
  sn  |  cn  | dn  
 -----+------+-----
- v12 | e122 | v21
  v11 | e121 | v22
  v11 | e131 | v33
  v11 | e132 | v31
+ v12 | e122 | v21
  v22 | e231 | v32
 (5 rows)
 
@@ -1136,6 +1155,168 @@ SELECT src.vname, count(*) FROM v1 AS src
  v12   |     1
  v13   |     1
 (3 rows)
+
+ALTER PROPERTY GRAPH g1 DROP EDGE TABLES (e3_3); -- simplify the graph
+-- VLE (Variable-Length Edge) patterns
+SELECT src FROM GRAPH_TABLE (g1 MATCH (a)->{0}() COLUMNS (a.vname AS src)) ORDER BY src;
+ src 
+-----
+ v11
+ v12
+ v13
+ v21
+ v22
+ v23
+ v31
+ v32
+ v33
+(9 rows)
+
+SELECT src, dst FROM GRAPH_TABLE (g1 MATCH (a)->{2}(b) COLUMNS (a.vname AS src, b.vname AS dst)) ORDER BY src, dst;
+ src | dst 
+-----+-----
+ v11 | v32
+ v12 | v12
+ v13 | v13
+ v21 | v21
+ v22 | v22
+ v23 | v23
+ v32 | v32
+(7 rows)
+
+SELECT src, dst FROM GRAPH_TABLE (g1 MATCH (a)->{1,3}(b) COLUMNS (a.vname AS src, b.vname AS dst)) ORDER BY src, dst;
+ src | dst 
+-----+-----
+ v11 | v22
+ v11 | v22
+ v11 | v31
+ v11 | v32
+ v11 | v33
+ v12 | v12
+ v12 | v21
+ v12 | v21
+ v13 | v13
+ v13 | v23
+ v13 | v23
+ v21 | v12
+ v21 | v12
+ v21 | v21
+ v22 | v22
+ v22 | v32
+ v22 | v32
+ v23 | v13
+ v23 | v13
+ v23 | v23
+ v32 | v22
+ v32 | v22
+ v32 | v32
+(23 rows)
+
+SELECT src, dst FROM GRAPH_TABLE (g1 MATCH (a)->{2,}(b) COLUMNS (a.vname AS src, b.vname AS dst)) ORDER BY src, dst; -- depth error
+ERROR:  exceeded maximum graph traversal depth
+HINT:  The query may contain a cyclic or excessively long path pattern. Try simplifying the pattern or increasing max_graph_stack_depth.
+SELECT src, dst FROM GRAPH_TABLE (g1 MATCH (a)->{,2}(b) COLUMNS (a.vname AS src, b.vname AS dst)) ORDER BY src, dst;
+ src | dst 
+-----+-----
+ v11 | v11
+ v11 | v22
+ v11 | v31
+ v11 | v32
+ v11 | v33
+ v12 | v12
+ v12 | v12
+ v12 | v21
+ v13 | v13
+ v13 | v13
+ v13 | v23
+ v21 | v12
+ v21 | v21
+ v21 | v21
+ v22 | v22
+ v22 | v22
+ v22 | v32
+ v23 | v13
+ v23 | v23
+ v23 | v23
+ v31 | v31
+ v32 | v22
+ v32 | v32
+ v32 | v32
+ v33 | v33
+(25 rows)
+
+SELECT src, dst FROM GRAPH_TABLE (g1 MATCH (a)->{,2}(b)->(c) COLUMNS (a.vname AS src, c.vname AS dst)) ORDER BY src, dst;
+ src | dst 
+-----+-----
+ v11 | v22
+ v11 | v22
+ v11 | v31
+ v11 | v32
+ v11 | v33
+ v12 | v12
+ v12 | v21
+ v12 | v21
+ v13 | v13
+ v13 | v23
+ v13 | v23
+ v21 | v12
+ v21 | v12
+ v21 | v21
+ v22 | v22
+ v22 | v32
+ v22 | v32
+ v23 | v13
+ v23 | v13
+ v23 | v23
+ v32 | v22
+ v32 | v22
+ v32 | v32
+(23 rows)
+
+SELECT src, dst FROM GRAPH_TABLE (g1 MATCH (a)-[e]-{2}(b) COLUMNS (a.vname AS src, b.vname AS dst)) ORDER BY src, dst;
+ src | dst 
+-----+-----
+ v11 | v11
+ v11 | v11
+ v11 | v11
+ v11 | v32
+ v11 | v32
+ v12 | v12
+ v12 | v12
+ v12 | v12
+ v12 | v12
+ v13 | v13
+ v13 | v13
+ v13 | v13
+ v13 | v13
+ v21 | v21
+ v21 | v21
+ v21 | v21
+ v21 | v21
+ v22 | v22
+ v22 | v22
+ v22 | v22
+ v22 | v22
+ v22 | v22
+ v22 | v31
+ v22 | v33
+ v23 | v23
+ v23 | v23
+ v23 | v23
+ v23 | v23
+ v31 | v22
+ v31 | v31
+ v31 | v33
+ v32 | v11
+ v32 | v11
+ v32 | v32
+ v32 | v32
+ v32 | v32
+ v32 | v32
+ v33 | v22
+ v33 | v31
+ v33 | v33
+(40 rows)
 
 -- Locking clause on GRAPH_TABLE
 SELECT * FROM GRAPH_TABLE (g1 MATCH (src IS vl1) COLUMNS (src.vname)) gt FOR UPDATE OF gt;  -- not supported

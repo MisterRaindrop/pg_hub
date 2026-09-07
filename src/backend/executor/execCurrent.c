@@ -338,6 +338,7 @@ search_plan_tree(PlanState *node, Oid table_oid,
 		case T_TidRangeScanState:
 		case T_ForeignScanState:
 		case T_CustomScanState:
+		case T_GraphScanState:
 			{
 				ScanState  *sstate = (ScanState *) node;
 

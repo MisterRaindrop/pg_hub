@@ -2208,14 +2208,28 @@ typedef struct GraphPropertyRef
 	ParseLoc	location;
 } GraphPropertyRef;
 
+/*
+ * GraphRLSQual - per backing-table SELECT RLS quals for a native graph scan.
+ *
+ * The native graph plan carries one of these per backing (element) table that
+ * is subject to row-level security; the quals' Vars reference varno OUTER_VAR
+ * (see get_graph_row_security_quals), and the executor matches the table by
+ * relid and compiles the quals into a per-element ExprState.
+ */
+typedef struct GraphRLSQual
+{
+	NodeTag		type;
+	Oid			relid;			/* backing (element) table OID */
+	List	   *quals;			/* SELECT RLS quals, Vars on OUTER_VAR */
+}			GraphRLSQual;
+
 /*--------------------
  * TargetEntry -
  *	   a target entry (used in query target lists)
  *
  * Strictly speaking, a TargetEntry isn't an expression node (since it can't
  * be evaluated by ExecEvalExpr).  But we treat it as one anyway, since in
- * very many places it's convenient to process a whole query targetlist as a
- * single expression tree.
+ * very many places it's convenient to process a whole query targetlist as a * single expression tree.
  *
  * In a SELECT's targetlist, resno should always be equal to the item's
  * ordinal position (counting from 1).  However, in an INSERT or UPDATE

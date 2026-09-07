@@ -37,7 +37,6 @@
 #include "optimizer/restrictinfo.h"
 #include "optimizer/subselect.h"
 #include "optimizer/tlist.h"
-#include "parser/parse_clause.h"
 #include "parser/parsetree.h"
 #include "partitioning/partprune.h"
 #include "tcop/tcopprot.h"
@@ -157,6 +156,9 @@ static ForeignScan *create_foreignscan_plan(PlannerInfo *root, ForeignPath *best
 static CustomScan *create_customscan_plan(PlannerInfo *root,
 										  CustomPath *best_path,
 										  List *tlist, List *scan_clauses);
+static Plan *create_graphscan_plan(PlannerInfo *root,
+								   GraphPath * best_path,
+								   List *tlist, List *scan_clauses);
 static NestLoop *create_nestloop_plan(PlannerInfo *root, NestPath *best_path);
 static MergeJoin *create_mergejoin_plan(PlannerInfo *root, MergePath *best_path);
 static HashJoin *create_hashjoin_plan(PlannerInfo *root, HashPath *best_path);
@@ -418,6 +420,7 @@ create_plan_recurse(PlannerInfo *root, Path *best_path, int flags)
 		case T_NamedTuplestoreScan:
 		case T_ForeignScan:
 		case T_CustomScan:
+		case T_GraphScan:
 			plan = create_scan_plan(root, best_path, flags);
 			break;
 		case T_HashJoin:
@@ -793,6 +796,13 @@ create_scan_plan(PlannerInfo *root, Path *best_path, int flags)
 												   (CustomPath *) best_path,
 												   tlist,
 												   scan_clauses);
+			break;
+
+		case T_GraphScan:
+			plan = (Plan *) create_graphscan_plan(root,
+												  (GraphPath *) best_path,
+												  tlist,
+												  scan_clauses);
 			break;
 
 		default:
@@ -4183,6 +4193,177 @@ create_customscan_plan(PlannerInfo *root, CustomPath *best_path,
 
 	return cplan;
 }
+
+/* ----------------------------------------------------------------
+ *	create_graphscan_plan
+ *
+ *		Transform a GraphPath into a GraphScan plan node.
+ * ----------------------------------------------------------------
+ */
+static Plan *
+create_graphscan_plan(PlannerInfo *root, GraphPath * best_path,
+					  List *tlist, List *scan_clauses)
+{
+	GraphScan  *scan;
+	Scan	   *scan_node;
+
+	scan = makeNode(GraphScan);
+	scan_node = &scan->scan;
+
+	/* Copy cost info from Path to Plan */
+	copy_generic_path_info(&scan_node->plan, &best_path->path);
+
+	/* Set target list and qual, unwrapping RestrictInfo nodes */
+	scan_node->plan.targetlist = tlist;
+	scan_clauses = order_qual_clauses(root, scan_clauses);
+	scan_clauses = extract_actual_clauses(scan_clauses, false);
+
+	/*
+	 * Replace any outer-relation variables with nestloop params, like every
+	 * other scan type.  Without this, element/side quals referencing outer
+	 * relations (e.g. a parameterized scan inside a LATERAL join or a
+	 * recursive CTE) keep raw range-table-index Vars, which setrefs cannot
+	 * convert and the executor would read from the wrong slot.
+	 */
+	if (best_path->path.param_info)
+		scan_clauses = (List *)
+			replace_nestloop_params(root, (Node *) scan_clauses);
+
+	scan_node->plan.qual = scan_clauses;
+	scan_node->plan.lefttree = NULL;
+	scan_node->plan.righttree = NULL;
+
+	/*
+	 * Build the plan's own copy of the graph output columns
+	 * (graph_table_columns), rewriting any outer-relation Vars to nestloop
+	 * Params.  Working on a copy keeps the shared range-table entry
+	 * untouched; the executor projects from GraphScan.graph_table_columns and
+	 * resolves GraphPropertyRef nodes (including function/coercion wrappers
+	 * around them) against the element model at init time, so the plan
+	 * targetlist is left as bare Vars.
+	 */
+	{
+		RangeTblEntry *rte = root->simple_rte_array[
+													best_path->path.parent->relid];
+		List	   *gtcols = NIL;
+		ListCell   *lc;
+
+		foreach(lc, rte->graph_table_columns)
+		{
+			TargetEntry *gte = copyObject(lfirst_node(TargetEntry, lc));
+
+			gte->expr = (Expr *)
+				replace_nestloop_params(root, (Node *) gte->expr);
+			gtcols = lappend(gtcols, gte);
+		}
+		scan->graph_table_columns = gtcols;
+	}
+
+	/* Copy graph-specific fields */
+	scan->graph_oid = best_path->graph_oid;
+	scan->graph_pattern = best_path->graph_pattern;
+	scan->rls_quals = best_path->rls_quals;
+	scan->rls_element_oids = best_path->rls_element_oids;
+
+	/*
+	 * RLS policy quals may contain SubLinks (correlated subqueries).  Convert
+	 * them to SubPlans so they can be evaluated at execution time; this also
+	 * registers them in root->glob->subplans for the executor.
+	 */
+	if (scan->rls_quals != NIL)
+	{
+		List	   *new_rls = NIL;
+		ListCell   *lc;
+
+		foreach(lc, scan->rls_quals)
+		{
+			GraphRLSQual *rlsq = lfirst_node(GraphRLSQual, lc);
+			Oid			relid = rlsq->relid;
+			List	   *quals = rlsq->quals;
+			List	   *new_quals = NIL;
+			GraphRLSQual *new_rlsq;
+			ListCell   *qlc;
+
+			/*
+			 * Converting these quals to SubPlans may re-plan a GRAPH_TABLE
+			 * query contained in a policy, which in turn recurses into
+			 * create_graphscan_plan for the same backing table.  Detect that
+			 * irreducible recursion and error out immediately.
+			 */
+			if (list_member_oid(root->glob->graph_plan_rls_active, relid))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_RECURSION),
+						 errmsg("infinite recursion detected")));
+
+			root->glob->graph_plan_rls_active =
+				lappend_oid(root->glob->graph_plan_rls_active, relid);
+
+			foreach(qlc, quals)
+				new_quals = lappend(new_quals,
+									SS_process_sublinks(root,
+														(Node *) lfirst(qlc),
+														true));
+
+			root->glob->graph_plan_rls_active =
+				list_delete_first(root->glob->graph_plan_rls_active);
+
+			new_rlsq = makeNode(GraphRLSQual);
+			new_rlsq->relid = relid;
+			new_rlsq->quals = new_quals;
+			new_rls = lappend(new_rls, new_rlsq);
+		}
+		scan->rls_quals = new_rls;
+	}
+
+	/*
+	 * LATERAL (outer-relation) references in the graph element / graph-level
+	 * WHERE clauses are evaluated inside the graph executor, whose compiled
+	 * quals (see compile_qual_clause) resolve properties by name and read
+	 * outer values from nestloop Params.  Replace outer-relation Vars with
+	 * nestloop Params so the enclosing NestLoop (the graph is a parameterized
+	 * inner) supplies the values at runtime.  Operate on a copy so the shared
+	 * range-table entry is not mutated at plan time; the executor reads
+	 * scan->graph_pattern.
+	 *
+	 * GraphPropertyRef nodes are left untouched here; the executor resolves
+	 * them against the element model.
+	 */
+	if (scan->graph_pattern != NULL)
+	{
+		List	   *path_term;
+		ListCell   *lc;
+
+		scan->graph_pattern = copyObject(scan->graph_pattern);
+		path_term = linitial(scan->graph_pattern->path_pattern_list);
+
+		foreach(lc, path_term)
+		{
+			GraphElementPattern *gep = lfirst_node(GraphElementPattern, lc);
+
+			if (gep->whereClause)
+				gep->whereClause =
+					replace_nestloop_params(root, gep->whereClause);
+			if (gep->subexpr)
+			{
+				ListCell   *slc;
+
+				foreach(slc, gep->subexpr)
+					lfirst(slc) = replace_nestloop_params(root,
+														  (Node *) lfirst(slc));
+			}
+		}
+		if (scan->graph_pattern->whereClause)
+			scan->graph_pattern->whereClause =
+				replace_nestloop_params(root,
+										scan->graph_pattern->whereClause);
+	}
+
+	/* scanrelid points to the RTE_GRAPH_TABLE entry */
+	scan_node->scanrelid = best_path->path.parent->relid;
+
+	return (Plan *) scan;
+}
+
 
 
 /*****************************************************************************

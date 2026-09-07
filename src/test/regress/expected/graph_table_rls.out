@@ -105,6 +105,9 @@ SET SESSION AUTHORIZATION regress_graph_rls_bob;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
 NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Scientists
          pguser          | aid |   dtitle    | dlevel 
 -------------------------+-----+-------------+--------
  regress_graph_rls_alice |   5 | Politicians |      2
@@ -119,6 +122,9 @@ SET SESSION AUTHORIZATION regress_graph_rls_carol;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
 NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Scientists
          pguser          | aid |   dtitle    | dlevel 
 -------------------------+-----+-------------+--------
  regress_graph_rls_alice |   5 | Politicians |      2
@@ -132,6 +138,7 @@ NOTICE:  f_leak => Scientists
 SET SESSION AUTHORIZATION regress_graph_rls_dave;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Politicians
          pguser          | aid |   dtitle    | dlevel 
 -------------------------+-----+-------------+--------
  regress_graph_rls_alice |   5 | Politicians |      2
@@ -143,9 +150,12 @@ SET SESSION AUTHORIZATION regress_graph_rls_alice;
 SET row_security TO ON;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
-NOTICE:  f_leak => Artists
-NOTICE:  f_leak => Scientists
 NOTICE:  f_leak => Unspeakables
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Artists
          pguser          | aid |    dtitle    | dlevel 
 -------------------------+-----+--------------+--------
  regress_graph_rls_alice |   5 | Politicians  |      2
@@ -162,9 +172,12 @@ SET row_security TO OFF;
 RESET SESSION AUTHORIZATION;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
-NOTICE:  f_leak => Artists
-NOTICE:  f_leak => Scientists
 NOTICE:  f_leak => Unspeakables
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Artists
          pguser          | aid |    dtitle    | dlevel 
 -------------------------+-----+--------------+--------
  regress_graph_rls_alice |   5 | Politicians  |      2
@@ -180,9 +193,12 @@ NOTICE:  f_leak => Unspeakables
 SET SESSION AUTHORIZATION regress_graph_rls_exempt_user;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
-NOTICE:  f_leak => Artists
-NOTICE:  f_leak => Scientists
 NOTICE:  f_leak => Unspeakables
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Artists
          pguser          | aid |    dtitle    | dlevel 
 -------------------------+-----+--------------+--------
  regress_graph_rls_alice |   5 | Politicians  |      2
@@ -198,9 +214,12 @@ NOTICE:  f_leak => Unspeakables
 SET SESSION AUTHORIZATION regress_graph_rls_alice;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
-NOTICE:  f_leak => Artists
-NOTICE:  f_leak => Scientists
 NOTICE:  f_leak => Unspeakables
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Artists
          pguser          | aid |    dtitle    | dlevel 
 -------------------------+-----+--------------+--------
  regress_graph_rls_alice |   5 | Politicians  |      2
@@ -268,6 +287,9 @@ SET SESSION AUTHORIZATION regress_graph_rls_bob;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Scientists
 NOTICE:  f_leak => Paris
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Paris
          pguser          | aid |   dtitle   | dlevel 
 -------------------------+-----+------------+--------
  regress_graph_rls_bob   |   1 | Scientists |      1
@@ -281,9 +303,14 @@ NOTICE:  f_leak => Paris
 SET SESSION AUTHORIZATION regress_graph_rls_carol;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Tokyo
 NOTICE:  f_leak => Scientists
 NOTICE:  f_leak => Paris
+NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Scientists
 NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Paris
          pguser          | aid |   dtitle    | dlevel 
 -------------------------+-----+-------------+--------
  regress_graph_rls_alice |   5 | Politicians |      2
@@ -301,10 +328,13 @@ NOTICE:  f_leak => Tokyo
 SET SESSION AUTHORIZATION regress_graph_rls_dave;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => New York
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Paris
+NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Tokyo
 NOTICE:  f_leak => Artists
 NOTICE:  f_leak => Paris
-NOTICE:  f_leak => Tokyo
-NOTICE:  f_leak => New York
          pguser          | aid |   dtitle    | dlevel 
 -------------------------+-----+-------------+--------
  regress_graph_rls_alice |   5 | Politicians |      2
@@ -322,12 +352,17 @@ SET SESSION AUTHORIZATION regress_graph_rls_alice;
 SET row_security TO ON;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
-NOTICE:  f_leak => Artists
-NOTICE:  f_leak => Scientists
 NOTICE:  f_leak => Unspeakables
-NOTICE:  f_leak => Paris
-NOTICE:  f_leak => Tokyo
 NOTICE:  f_leak => New York
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Paris
+NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Artists
+NOTICE:  f_leak => Paris
          pguser          | aid |    dtitle    | dlevel 
 -------------------------+-----+--------------+--------
  regress_graph_rls_alice |   5 | Politicians  |      2
@@ -349,12 +384,17 @@ SET row_security TO OFF;
 RESET SESSION AUTHORIZATION;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
-NOTICE:  f_leak => Artists
-NOTICE:  f_leak => Scientists
 NOTICE:  f_leak => Unspeakables
-NOTICE:  f_leak => Paris
-NOTICE:  f_leak => Tokyo
 NOTICE:  f_leak => New York
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Paris
+NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Artists
+NOTICE:  f_leak => Paris
          pguser          | aid |    dtitle    | dlevel 
 -------------------------+-----+--------------+--------
  regress_graph_rls_alice |   5 | Politicians  |      2
@@ -375,12 +415,17 @@ NOTICE:  f_leak => New York
 SET SESSION AUTHORIZATION regress_graph_rls_exempt_user;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
-NOTICE:  f_leak => Artists
-NOTICE:  f_leak => Scientists
 NOTICE:  f_leak => Unspeakables
-NOTICE:  f_leak => Paris
-NOTICE:  f_leak => Tokyo
 NOTICE:  f_leak => New York
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Paris
+NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Artists
+NOTICE:  f_leak => Paris
          pguser          | aid |    dtitle    | dlevel 
 -------------------------+-----+--------------+--------
  regress_graph_rls_alice |   5 | Politicians  |      2
@@ -401,12 +446,17 @@ NOTICE:  f_leak => New York
 SET SESSION AUTHORIZATION regress_graph_rls_alice;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
-NOTICE:  f_leak => Artists
-NOTICE:  f_leak => Scientists
 NOTICE:  f_leak => Unspeakables
-NOTICE:  f_leak => Paris
-NOTICE:  f_leak => Tokyo
 NOTICE:  f_leak => New York
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Paris
+NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Artists
+NOTICE:  f_leak => Paris
          pguser          | aid |    dtitle    | dlevel 
 -------------------------+-----+--------------+--------
  regress_graph_rls_alice |   5 | Politicians  |      2
@@ -463,6 +513,9 @@ SET SESSION AUTHORIZATION regress_graph_rls_bob;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Scientists
 NOTICE:  f_leak => Paris
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Paris
          pguser          | aid |   dtitle   | dlevel 
 -------------------------+-----+------------+--------
  regress_graph_rls_bob   |   1 | Scientists |      1
@@ -476,9 +529,14 @@ NOTICE:  f_leak => Paris
 SET SESSION AUTHORIZATION regress_graph_rls_carol;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Tokyo
 NOTICE:  f_leak => Scientists
 NOTICE:  f_leak => Paris
+NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Scientists
 NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Paris
          pguser          | aid |   dtitle    | dlevel 
 -------------------------+-----+-------------+--------
  regress_graph_rls_alice |   5 | Politicians |      2
@@ -496,10 +554,13 @@ NOTICE:  f_leak => Tokyo
 SET SESSION AUTHORIZATION regress_graph_rls_dave;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => New York
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Paris
+NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Tokyo
 NOTICE:  f_leak => Artists
 NOTICE:  f_leak => Paris
-NOTICE:  f_leak => Tokyo
-NOTICE:  f_leak => New York
          pguser          | aid |   dtitle    | dlevel 
 -------------------------+-----+-------------+--------
  regress_graph_rls_alice |   5 | Politicians |      2
@@ -517,12 +578,17 @@ SET SESSION AUTHORIZATION regress_graph_rls_alice;
 SET row_security TO ON;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
-NOTICE:  f_leak => Artists
-NOTICE:  f_leak => Scientists
 NOTICE:  f_leak => Unspeakables
-NOTICE:  f_leak => Paris
-NOTICE:  f_leak => Tokyo
 NOTICE:  f_leak => New York
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Paris
+NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Artists
+NOTICE:  f_leak => Paris
          pguser          | aid |    dtitle    | dlevel 
 -------------------------+-----+--------------+--------
  regress_graph_rls_alice |   5 | Politicians  |      2
@@ -544,12 +610,17 @@ SET row_security TO OFF;
 RESET SESSION AUTHORIZATION;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
-NOTICE:  f_leak => Artists
-NOTICE:  f_leak => Scientists
 NOTICE:  f_leak => Unspeakables
-NOTICE:  f_leak => Paris
-NOTICE:  f_leak => Tokyo
 NOTICE:  f_leak => New York
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Paris
+NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Artists
+NOTICE:  f_leak => Paris
          pguser          | aid |    dtitle    | dlevel 
 -------------------------+-----+--------------+--------
  regress_graph_rls_alice |   5 | Politicians  |      2
@@ -570,12 +641,17 @@ NOTICE:  f_leak => New York
 SET SESSION AUTHORIZATION regress_graph_rls_exempt_user;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
-NOTICE:  f_leak => Artists
-NOTICE:  f_leak => Scientists
 NOTICE:  f_leak => Unspeakables
-NOTICE:  f_leak => Paris
-NOTICE:  f_leak => Tokyo
 NOTICE:  f_leak => New York
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Paris
+NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Artists
+NOTICE:  f_leak => Paris
          pguser          | aid |    dtitle    | dlevel 
 -------------------------+-----+--------------+--------
  regress_graph_rls_alice |   5 | Politicians  |      2
@@ -596,12 +672,17 @@ NOTICE:  f_leak => New York
 SET SESSION AUTHORIZATION regress_graph_rls_alice;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
-NOTICE:  f_leak => Artists
-NOTICE:  f_leak => Scientists
 NOTICE:  f_leak => Unspeakables
-NOTICE:  f_leak => Paris
-NOTICE:  f_leak => Tokyo
 NOTICE:  f_leak => New York
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Paris
+NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Artists
+NOTICE:  f_leak => Paris
          pguser          | aid |    dtitle    | dlevel 
 -------------------------+-----+--------------+--------
  regress_graph_rls_alice |   5 | Politicians  |      2
@@ -635,7 +716,7 @@ CREATE POLICY pr ON document TO regress_graph_rls_dave
                            COLUMNS (a.aid))));
 SET SESSION AUTHORIZATION regress_graph_rls_dave;
 EXECUTE graph_rls_query; -- error
-ERROR:  infinite recursion detected in policy for relation "document"
+ERROR:  infinite recursion detected
 SET SESSION AUTHORIZATION regress_graph_rls_alice;
 DROP POLICY pr ON document;
 --
@@ -653,10 +734,13 @@ CREATE POLICY p2 ON document AS RESTRICTIVE
 SET SESSION AUTHORIZATION regress_graph_rls_dave;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => New York
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Paris
+NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Tokyo
 NOTICE:  f_leak => Artists
 NOTICE:  f_leak => Paris
-NOTICE:  f_leak => Tokyo
-NOTICE:  f_leak => New York
          pguser          | aid |   dtitle    | dlevel 
 -------------------------+-----+-------------+--------
  regress_graph_rls_alice |   5 | Politicians |      2
@@ -686,12 +770,17 @@ EXECUTE graph_rls_query;
 SET SESSION AUTHORIZATION regress_graph_rls_exempt_user;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
-NOTICE:  f_leak => Artists
-NOTICE:  f_leak => Scientists
 NOTICE:  f_leak => Unspeakables
-NOTICE:  f_leak => Paris
-NOTICE:  f_leak => Tokyo
 NOTICE:  f_leak => New York
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Paris
+NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Artists
+NOTICE:  f_leak => Paris
          pguser          | aid |    dtitle    | dlevel 
 -------------------------+-----+--------------+--------
  regress_graph_rls_alice |   5 | Politicians  |      2
@@ -711,12 +800,17 @@ NOTICE:  f_leak => New York
 RESET SESSION AUTHORIZATION;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
-NOTICE:  f_leak => Artists
-NOTICE:  f_leak => Scientists
 NOTICE:  f_leak => Unspeakables
-NOTICE:  f_leak => Paris
-NOTICE:  f_leak => Tokyo
 NOTICE:  f_leak => New York
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Paris
+NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Artists
+NOTICE:  f_leak => Paris
          pguser          | aid |    dtitle    | dlevel 
 -------------------------+-----+--------------+--------
  regress_graph_rls_alice |   5 | Politicians  |      2
@@ -736,12 +830,17 @@ NOTICE:  f_leak => New York
 SET SESSION AUTHORIZATION regress_graph_rls_alice;
 EXECUTE graph_rls_query;
 NOTICE:  f_leak => Politicians
-NOTICE:  f_leak => Artists
-NOTICE:  f_leak => Scientists
 NOTICE:  f_leak => Unspeakables
-NOTICE:  f_leak => Paris
-NOTICE:  f_leak => Tokyo
 NOTICE:  f_leak => New York
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Paris
+NOTICE:  f_leak => Politicians
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Tokyo
+NOTICE:  f_leak => Scientists
+NOTICE:  f_leak => Artists
+NOTICE:  f_leak => Paris
          pguser          | aid |    dtitle    | dlevel 
 -------------------------+-----+--------------+--------
  regress_graph_rls_alice |   5 | Politicians  |      2

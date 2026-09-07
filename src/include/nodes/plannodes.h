@@ -929,6 +929,50 @@ typedef struct ForeignScan
  */
 struct CustomScanMethods;
 
+/* ----------------
+ *	   GraphScan node
+ *
+ * Native property graph scan (SQL/PGQ).  scan.scanrelid refers to an
+ * RTE_GRAPH_TABLE entry; vertex/edge tables are determined at execution
+ * time from the graph_pattern and pg_propgraph_* catalogs.
+ * ----------------
+ */
+struct GraphPattern;
+
+typedef struct GraphScan
+{
+	Scan		scan;
+	/* OID of the property graph in pg_propgraph_element et al */
+	Oid			graph_oid;
+	/* graph pattern (vertex/edge element list) to traverse */
+	struct GraphPattern *graph_pattern;
+
+	/*
+	 * Graph output columns (a list of TargetEntry), copied from the graph
+	 * RTE's graph_table_columns with any outer-relation Vars rewritten to
+	 * nestloop Params.  Owned by this plan node so the shared range-table
+	 * entry is not mutated at plan time; the executor projects from it.
+	 */
+	List	   *graph_table_columns;
+
+	/*
+	 * Row-level security: per backing-table SELECT RLS quals, computed at
+	 * plan time for the current user.  This is a list of GraphRLSQual nodes,
+	 * each holding the backing-table OID and its quals (whose Vars reference
+	 * varno OUTER_VAR, see get_graph_row_security_quals).  NIL if RLS does
+	 * not apply to any backing table.  Used by the executor to compile
+	 * per-element RLS quals.
+	 */
+	List	   *rls_quals;
+
+	/*
+	 * All backing-table OIDs that may be scanned by this node.  Kept so the
+	 * candidate plan dependencies can be registered even though the plan node
+	 * does not add range-table entries for the element tables.
+	 */
+	List	   *rls_element_oids;
+}			GraphScan;
+
 typedef struct CustomScan
 {
 	Scan		scan;

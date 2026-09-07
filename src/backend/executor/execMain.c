@@ -611,10 +611,12 @@ ExecCheckPermissions(List *rangeTable, List *rteperminfos,
 			/*
 			 * Only relation RTEs and subquery RTEs that were once relation
 			 * RTEs (views, property graphs) have their perminfoindex set.
+			 * RTE_GRAPH_TABLE also has a perminfoindex.
 			 */
 			Assert(rte->rtekind == RTE_RELATION ||
 				   (rte->rtekind == RTE_SUBQUERY &&
-					(rte->relkind == RELKIND_VIEW || rte->relkind == RELKIND_PROPGRAPH)));
+					(rte->relkind == RELKIND_VIEW || rte->relkind == RELKIND_PROPGRAPH)) ||
+				   rte->rtekind == RTE_GRAPH_TABLE);
 
 			(void) getRTEPermissionInfo(rteperminfos, rte);
 			/* Many-to-one mapping not allowed */

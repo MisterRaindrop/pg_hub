@@ -1104,6 +1104,48 @@ extract_lateral_references(PlannerInfo *root, RelOptInfo *brel, Index rtindex)
 		vars = pull_vars_of_level((Node *) rte->tablefunc, 0);
 	else if (rte->rtekind == RTE_VALUES)
 		vars = pull_vars_of_level((Node *) rte->values_lists, 0);
+	else if (rte->rtekind == RTE_GRAPH_TABLE)
+	{
+		/*
+		 * A GRAPH_TABLE range table entry may reference outer relations in
+		 * its element WHERE clauses, graph-level WHERE clause,
+		 * subexpressions, and COLUMNS expressions (see set_graph_pathlist).
+		 * Collect all level-zero Vars from those so the planner can register
+		 * the lateral dependency and the executor can resolve them via
+		 * nestloop Params.
+		 */
+		GraphPattern *gp = rte->graph_pattern;
+		List	   *all = NIL;
+		ListCell   *lc2;
+
+		if (gp != NULL)
+		{
+			foreach(lc2, gp->path_pattern_list)
+			{
+				List	   *path_term = (List *) lfirst(lc2);
+				ListCell   *lc3;
+
+				foreach(lc3, path_term)
+				{
+					GraphElementPattern *gep = lfirst_node(GraphElementPattern, lc3);
+
+					if (gep->whereClause)
+						all = lappend(all, gep->whereClause);
+					if (gep->subexpr != NIL)
+						all = lappend(all, (Node *) gep->subexpr);
+				}
+			}
+			if (gp->whereClause)
+				all = lappend(all, gp->whereClause);
+		}
+		foreach(lc2, rte->graph_table_columns)
+		{
+			TargetEntry *gte = lfirst_node(TargetEntry, lc2);
+
+			all = lappend(all, (Node *) gte->expr);
+		}
+		vars = pull_vars_of_level((Node *) all, 0);
+	}
 	else
 	{
 		Assert(false);

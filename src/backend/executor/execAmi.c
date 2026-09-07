@@ -27,6 +27,7 @@
 #include "executor/nodeCustom.h"
 #include "executor/nodeForeignscan.h"
 #include "executor/nodeFunctionscan.h"
+#include "executor/nodeGraphScan.h"
 #include "executor/nodeGather.h"
 #include "executor/nodeGatherMerge.h"
 #include "executor/nodeGroup.h"
@@ -299,6 +300,10 @@ ExecReScan(PlanState *node)
 			ExecReScanLimit((LimitState *) node);
 			break;
 
+		case T_GraphScanState:
+			ExecReScanGraphScan((GraphScanState *) node);
+			break;
+
 		default:
 			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(node));
 			break;
@@ -569,6 +574,7 @@ ExecSupportsBackwardScan(Plan *node)
 			return false;
 
 		case T_SeqScan:
+		case T_GraphScan:
 		case T_TidScan:
 		case T_TidRangeScan:
 		case T_FunctionScan:

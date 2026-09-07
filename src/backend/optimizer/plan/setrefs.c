@@ -607,6 +607,17 @@ add_rte_to_flat_rtable(PlannerGlobal *glob, List *rteperminfos,
 	}
 
 	/*
+	 * In the case of RTE_GRAPH_TABLE, it is like RTE_RELATION and
+	 * RTE_SUBQUERY. However only plain relations and subqueries are eligible
+	 * for runtime partition pruning; do not add a graph RTE's RT index to
+	 * allRelids/unprunableRelids since it is not a prunable relation.
+	 */
+	if (newrte->rtekind == RTE_GRAPH_TABLE && OidIsValid(newrte->relid))
+	{
+		glob->relationOids = lappend_oid(glob->relationOids, newrte->relid);
+	}
+
+	/*
 	 * Add a copy of the RTEPermissionInfo, if any, corresponding to this RTE
 	 * to the flattened global list.
 	 */
@@ -869,6 +880,19 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 			break;
 		case T_CustomScan:
 			set_customscan_references(root, (CustomScan *) plan, rtoffset);
+			break;
+		case T_GraphScan:
+			{
+				GraphScan  *splan = (GraphScan *) plan;
+
+				splan->scan.scanrelid += rtoffset;
+				splan->scan.plan.targetlist =
+					fix_scan_list(root, splan->scan.plan.targetlist,
+								  rtoffset, NUM_EXEC_TLIST(plan));
+				splan->scan.plan.qual =
+					fix_scan_list(root, splan->scan.plan.qual,
+								  rtoffset, NUM_EXEC_QUAL(plan));
+			}
 			break;
 
 		case T_NestLoop:
@@ -3762,7 +3786,8 @@ extract_query_dependencies_walker(Node *node, PlannerInfo *context)
 
 			if (rte->rtekind == RTE_RELATION ||
 				(rte->rtekind == RTE_SUBQUERY && OidIsValid(rte->relid)) ||
-				(rte->rtekind == RTE_NAMEDTUPLESTORE && OidIsValid(rte->relid)))
+				(rte->rtekind == RTE_NAMEDTUPLESTORE && OidIsValid(rte->relid)) ||
+				(rte->rtekind == RTE_GRAPH_TABLE && OidIsValid(rte->relid)))
 				context->glob->relationOids =
 					lappend_oid(context->glob->relationOids, rte->relid);
 		}

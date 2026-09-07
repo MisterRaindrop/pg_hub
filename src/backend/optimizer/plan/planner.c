@@ -381,6 +381,7 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	glob->relationOids = NIL;
 	glob->invalItems = NIL;
 	glob->paramExecTypes = NIL;
+	glob->graph_plan_rls_active = NIL;
 	glob->lastPHId = 0;
 	glob->lastRowMarkId = 0;
 	glob->lastPlanNodeId = 0;

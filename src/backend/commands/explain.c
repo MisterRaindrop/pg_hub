@@ -1525,6 +1525,9 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			else
 				pname = sname;
 			break;
+		case T_GraphScan:
+			pname = sname = "Graph Scan";
+			break;
 		case T_Material:
 			pname = sname = "Materialize";
 			break;
@@ -1682,6 +1685,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			break;
 		case T_ForeignScan:
 		case T_CustomScan:
+		case T_GraphScan:
 			if (((Scan *) plan)->scanrelid > 0)
 				ExplainScanTarget((Scan *) plan, es);
 			break;
@@ -2170,6 +2174,12 @@ ExplainNode(PlanState *planstate, List *ancestors,
 				if (css->methods->ExplainCustomScan)
 					css->methods->ExplainCustomScan(css, ancestors, es);
 			}
+			break;
+		case T_GraphScan:
+			show_scan_qual(plan->qual, "Filter", planstate, ancestors, es);
+			if (plan->qual)
+				show_instrumentation_count("Rows Removed by Filter", 1,
+										   planstate, es);
 			break;
 		case T_NestLoop:
 			show_upper_qual(((NestLoop *) plan)->join.joinqual,

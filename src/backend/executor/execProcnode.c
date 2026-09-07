@@ -84,6 +84,7 @@
 #include "executor/nodeCustom.h"
 #include "executor/nodeForeignscan.h"
 #include "executor/nodeFunctionscan.h"
+#include "executor/nodeGraphScan.h"
 #include "executor/nodeGather.h"
 #include "executor/nodeGatherMerge.h"
 #include "executor/nodeGroup.h"
@@ -289,6 +290,11 @@ ExecInitNode(Plan *node, EState *estate, int eflags)
 		case T_CustomScan:
 			result = (PlanState *) ExecInitCustomScan((CustomScan *) node,
 													  estate, eflags);
+			break;
+
+		case T_GraphScan:
+			result = (PlanState *) ExecInitGraphScan((GraphScan *) node,
+													 estate, eflags);
 			break;
 
 			/*
@@ -663,6 +669,10 @@ ExecEndNode(PlanState *node)
 
 		case T_CustomScanState:
 			ExecEndCustomScan((CustomScanState *) node);
+			break;
+
+		case T_GraphScanState:
+			ExecEndGraphScan((GraphScanState *) node);
 			break;
 
 			/*
