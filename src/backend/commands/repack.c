@@ -216,6 +216,7 @@ static Oid	determine_clustered_index(Relation rel, bool usingindex,
 									  const char *indexname);
 
 static void start_repack_decoding_worker(Oid relid);
+static void wait_for_repack_worker_to_attach(void);
 static void stop_repack_decoding_worker(void);
 static void stop_repack_decoding_worker_cb(int code, Datum arg);
 static Snapshot get_initial_snapshot(DecodingWorker *worker);
@@ -3673,10 +3674,34 @@ start_repack_decoding_worker(Oid relid)
 	bgw.bgw_notify_pid = MyProcPid;
 
 	if (!RegisterDynamicBackgroundWorker(&bgw, &decoding_worker->handle))
+	{
+		/*
+		 * We couldn't register the worker, so forget the error message queue
+		 * we set up for it. Otherwise stopping the worker later would try to
+		 * terminate a worker that was never registered.
+		 */
+		decoding_worker->handle = NULL;
+		shm_mq_detach(decoding_worker->error_mqh);
+		decoding_worker->error_mqh = NULL;
+
 		ereport(ERROR,
 				errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
 				errmsg("out of background worker slots"),
 				errhint("You might need to increase \"%s\".", "max_worker_processes"));
+	}
+
+	/*
+	 * Now that the worker is registered, connect the error message queue to
+	 * it.
+	 */
+	shm_mq_set_handle(decoding_worker->error_mqh, decoding_worker->handle);
+
+	/*
+	 * Make sure the worker has started before we wait for it to initialize
+	 * decoding below, so that the failure-to-start case does not hang
+	 * forever.
+	 */
+	wait_for_repack_worker_to_attach();
 
 	/*
 	 * The decoding setup must be done before the caller can have XID assigned
@@ -3702,6 +3727,89 @@ start_repack_decoding_worker(Oid relid)
 }
 
 /*
+ * Wait for the decoding worker to start up, and throw an error if it fails
+ * to do so.
+ *
+ * This is similar to WaitForParallelWorkersToAttach(). The only reliable way
+ * to tell a worker that failed to start (fork failure, or an exit before it
+ * attached) from one that is merely slow is to check whether it became the
+ * sender on the error message queue. If it stopped without attaching, nothing
+ * was queued and we report the generic failure ourselves. If it attached, any
+ * error it reported is in the queue and is thrown when we process pending
+ * messages, either here or later while we wait for it to initialize decoding.
+ */
+static void
+wait_for_repack_worker_to_attach(void)
+{
+	bool		worker_attached = false;
+
+	for (;;)
+	{
+		BgwHandleStatus status;
+		shm_mq	   *mq;
+		int			rc;
+		pid_t		pid;
+
+		/*
+		 * This will process any repack messages that are pending and it may
+		 * also throw an error propagated from a worker.
+		 */
+		CHECK_FOR_INTERRUPTS();
+
+		/* If the worker is known to have attached, we're done. */
+		if (worker_attached)
+			break;
+
+		/* If error_mqh is NULL, the worker has already exited cleanly. */
+		if (decoding_worker->error_mqh == NULL)
+		{
+			worker_attached = true;
+			continue;
+		}
+
+		status = GetBackgroundWorkerPid(decoding_worker->handle, &pid);
+		if (status == BGWH_STARTED)
+		{
+			/* Has the worker attached to the error message queue? */
+			mq = shm_mq_get_queue(decoding_worker->error_mqh);
+			if (shm_mq_get_sender(mq) != NULL)
+				worker_attached = true;
+		}
+		else if (status == BGWH_STOPPED)
+		{
+			/*
+			 * If the worker stopped without attaching to the error message
+			 * queue, throw an error. Otherwise it attached and reported an
+			 * error before exiting, so mark it attached and let the next
+			 * attempt to process pending messages, here or later while the
+			 * initial snapshot is set up, throw that error.
+			 */
+			mq = shm_mq_get_queue(decoding_worker->error_mqh);
+			if (shm_mq_get_sender(mq) == NULL)
+				ereport(ERROR,
+						errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+						errmsg("REPACK decoding worker failed to start"),
+						errhint("More details may be available in the server log."));
+
+			worker_attached = true;
+		}
+		else
+		{
+			/*
+			 * Worker not yet started, so we must wait. The postmaster will
+			 * notify us via bgw_notify_pid if its state changes.
+			 */
+			rc = WaitLatch(MyLatch,
+						   WL_LATCH_SET | WL_EXIT_ON_PM_DEATH,
+						   -1, WAIT_EVENT_BGWORKER_STARTUP);
+
+			if (rc & WL_LATCH_SET)
+				ResetLatch(MyLatch);
+		}
+	}
+}
+
+/*
  * Stop the decoding worker and cleanup the related resources.
  *
  * The worker stops on its own when it knows there is no more work to do, but
@@ -3714,13 +3822,43 @@ stop_repack_decoding_worker(void)
 	if (decoding_worker == NULL)
 		return;
 
-	/* Terminate the worker process, if one is running. */
+	/* Terminate the worker and forget its error message queue. */
+	if (decoding_worker->error_mqh != NULL)
+	{
+		/*
+		 * The error message queue is attached before the worker is
+		 * registered.
+		 */
+		if (decoding_worker->handle != NULL)
+			TerminateBackgroundWorker(decoding_worker->handle);
+
+		shm_mq_detach(decoding_worker->error_mqh);
+		decoding_worker->error_mqh = NULL;
+	}
+
+	/*
+	 * Cancel any sleep on the condition variable before detaching the shared
+	 * memory segment, because the CV lives in that segment. Otherwise later
+	 * cleanup would touch freed memory.
+	 */
+	ConditionVariableCancelSleep();
+
+	/* If we have allocated a shared memory segment, detach it. */
+	if (decoding_worker->seg != NULL)
+	{
+		dsm_detach(decoding_worker->seg);
+		decoding_worker->seg = NULL;
+	}
+
+	/*
+	 * We can't finish the REPACK command until the worker has exited. This
+	 * means, in particular, that we can't respond to interrupts at this
+	 * stage.
+	 */
 	if (decoding_worker->handle != NULL)
 	{
 		BgwHandleStatus status;
 
-		TerminateBackgroundWorker(decoding_worker->handle);
-		/* The worker should really exit before the REPACK command does. */
 		HOLD_INTERRUPTS();
 		status = WaitForBackgroundWorkerShutdown(decoding_worker->handle);
 		RESUME_INTERRUPTS();
@@ -3731,22 +3869,6 @@ stop_repack_decoding_worker(void)
 					errmsg("postmaster exited during REPACK command"));
 	}
 
-	/*
-	 * Now detach from our shared memory segment.  In error cases there might
-	 * still be messages from the worker in the queue, which ProcessInterrupts
-	 * would try to read; this is pointless (and causes an assertion failure),
-	 * so set the global pointer to NULL to have ProcessRepackMessages ignore
-	 * them.
-	 *
-	 * We must also cancel the current sleep, if one is still set up.  This is
-	 * critical because the CV lives in the DSM that we're about to detach, so
-	 * if we omit it, later automatic cleanup tries to clear freed memory.
-	 */
-	if (decoding_worker->error_mqh != NULL)
-		shm_mq_detach(decoding_worker->error_mqh);
-	ConditionVariableCancelSleep();
-	if (decoding_worker->seg != NULL)
-		dsm_detach(decoding_worker->seg);
 	pfree(decoding_worker);
 	decoding_worker = NULL;
 }
@@ -3851,9 +3973,11 @@ ProcessRepackMessages(void)
 
 	/*
 	 * Nothing to do if we haven't launched the worker yet or have already
-	 * terminated it.
+	 * terminated it. Stopping the worker detaches the error message queue
+	 * before clearing decoding_worker, so also bail out once error_mqh is
+	 * gone.
 	 */
-	if (decoding_worker == NULL)
+	if (decoding_worker == NULL || decoding_worker->error_mqh == NULL)
 		return;
 
 	/*
