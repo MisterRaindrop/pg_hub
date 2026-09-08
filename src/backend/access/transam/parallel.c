@@ -1597,10 +1597,9 @@ ParallelWorkerReportLastRecEnd(XLogRecPtr last_xlog_end)
 }
 
 /*
- * Make sure the leader tries to read from our error queue one more time.
- * This guards against the case where we exit uncleanly without sending an
- * ErrorResponse to the leader, for example because some code calls proc_exit
- * directly.
+ * Make sure the leader knows we're done.  This guards against the case where
+ * we exit uncleanly without sending an ErrorResponse to the leader, for
+ * example because some code calls proc_exit directly.
  *
  * Also explicitly detach from dsm segment so that subsystems using
  * on_dsm_detach() have a chance to send stats before the stats subsystem is
@@ -1615,6 +1614,8 @@ ParallelWorkerReportLastRecEnd(XLogRecPtr last_xlog_end)
 static void
 ParallelWorkerShutdown(int code, Datum arg)
 {
+	pq_putmessage(PqMsg_Terminate, NULL, 0);
+
 	SendProcSignal(ParallelLeaderPid,
 				   PROCSIG_PARALLEL_MESSAGE,
 				   ParallelLeaderProcNumber);
