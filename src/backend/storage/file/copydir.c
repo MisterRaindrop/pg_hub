@@ -133,15 +133,12 @@ copydir(const char *fromdir, const char *todir, bool recurse)
 void
 copy_file(const char *fromfile, const char *tofile)
 {
-	char	   *buffer;
+	alignas(MAXIMUM_ALIGNOF) char buffer[8 * BLCKSZ];
 	int			srcfd;
 	int			dstfd;
 	ssize_t		nbytes;
 	off_t		offset;
 	off_t		flush_offset;
-
-	/* Size of copy buffer (read and write requests) */
-#define COPY_BUF_SIZE (8 * BLCKSZ)
 
 	/*
 	 * Size of data flush requests.  It seems beneficial on most platforms to
@@ -154,9 +151,6 @@ copy_file(const char *fromfile, const char *tofile)
 #else
 #define FLUSH_DISTANCE (1024 * 1024)
 #endif
-
-	/* Use palloc to ensure we get a maxaligned buffer */
-	buffer = palloc(COPY_BUF_SIZE);
 
 	/*
 	 * Open the files
@@ -194,7 +188,7 @@ copy_file(const char *fromfile, const char *tofile)
 		}
 
 		pgstat_report_wait_start(WAIT_EVENT_COPY_FILE_READ);
-		nbytes = read(srcfd, buffer, COPY_BUF_SIZE);
+		nbytes = read(srcfd, buffer, sizeof buffer);
 		pgstat_report_wait_end();
 		if (nbytes < 0)
 			ereport(ERROR,
@@ -228,8 +222,6 @@ copy_file(const char *fromfile, const char *tofile)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not close file \"%s\": %m", fromfile)));
-
-	pfree(buffer);
 }
 
 /*

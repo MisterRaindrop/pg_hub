@@ -535,7 +535,8 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 	 * it this way, rather than just making static arrays, for two reasons:
 	 * (1) no need to waste the storage in most instantiations of the backend;
 	 * (2) a static char array isn't guaranteed to have any particular
-	 * alignment, whereas palloc() will provide MAXALIGN'd storage.
+	 * alignment, whereas palloc() will provide MAXALIGN'd storage. (Although
+	 * the latter could be handled with alignas.)
 	 */
 	replay_image_masked = (char *) palloc(BLCKSZ);
 	primary_image_masked = (char *) palloc(BLCKSZ);
