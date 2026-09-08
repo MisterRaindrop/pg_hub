@@ -198,6 +198,29 @@ select lower(r) = repeat('7', 200)::numeric as lower_ok,
 
 drop table gist_ios_tupdesc;
 
+-- Test that tuples passing through nodeIndexscan.c's reorder queue keep their
+-- real ctid.  poly_ops' distance is only a lower bound (the bounding box), so
+-- gist_poly_consistent sets recheck and the ORDER BY value is recomputed; thin
+-- diagonal triangles make the estimate strictly low, forcing the requeue path,
+-- which re-stores the tuple with ExecForceStoreHeapTuple().
+create table gist_knn_ctid (id int, p polygon);
+insert into gist_knn_ctid
+select i, ('((' || i*10 || ',0),(' || (i*10+9) || ',9),('
+               || (i*10+9) || ',0))')::polygon
+from generate_series(1,20) i;
+create index gist_knn_ctid_idx on gist_knn_ctid using gist (p);
+vacuum analyze gist_knn_ctid;
+
+explain (costs off)
+select ctid, id from gist_knn_ctid order by p <-> point(100,4) limit 5;
+
+-- every row must be findable by the ctid it reported
+select count(*) as ctid_matches
+from (select ctid, id from gist_knn_ctid order by p <-> point(100,4) limit 5) s
+     join gist_knn_ctid t on t.ctid = s.ctid and t.id = s.id;
+
+drop table gist_knn_ctid;
+
 -- test deletion of LP_DEAD-marked index tuples
 create table gist_prune_tbl (k int, p point);
 create index gist_prune_tbl_p_index on gist_prune_tbl using gist (p);

@@ -1768,6 +1768,14 @@ ExecForceStoreHeapTuple(HeapTuple tuple,
 		slot->tts_flags |= TTS_FLAG_SHOULDFREE;
 		MemoryContextSwitchTo(oldContext);
 
+		/*
+		 * ExecClearTuple() above invalidated tts_tid; restore it from the
+		 * tuple so that projecting ctid (slot_getsysattr() reads tts_tid)
+		 * yields the real heap tid rather than InvalidBlockNumber.  This
+		 * matches what tts_heap_store_tuple() does for heap slots.
+		 */
+		slot->tts_tid = tuple->t_self;
+
 		if (shouldFree)
 			pfree(tuple);
 	}
