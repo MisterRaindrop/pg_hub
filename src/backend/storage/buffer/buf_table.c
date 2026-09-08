@@ -216,11 +216,11 @@ BufTableScan(BufferTag *tagPtr, uint32 hashcode, int buf_id)
 retry:
 	if(++attempts > 1000) goto die;
 	prev = P_NEW;
-	id = pg_atomic_fetch_u32(head);
+	id = pg_atomic_read_u32(head);
 	while(id != P_NEW)
 	{
 		/* this will get a fresh version of entry cache line */
-		next = pg_atomic_fetch_u32(&entries[id].next);
+		next = pg_atomic_read_u32(&entries[id].next);
 		if (BufferTagsEqual(&entries[id].tag, tagPtr))
 			return id;
 		if(entries[id].bucket != bucket)
@@ -229,8 +229,16 @@ retry:
 			{
 				/* step back for a while and try the same link again */
 				id = prev;
-				SPIN_DELAY(); 
-				continue;
+				next = pg_atomic_fetch_u32(&entries[id].next);
+				if(next != id)
+				{
+					/* promising, the oriign link changed 
+					 * so maybe we are back on the right chain
+					 * give it another chance */
+					id = next;
+					continue;
+				}
+				goto retry;
 			}
 			else
 				goto retry;
