@@ -263,12 +263,22 @@ sub pre_indent
 	# Protect wrapping in CATALOG()
 	$source =~ s!^(CATALOG\(.*)$!/*$1*/!gm;
 
+	# pg_bsd_indent doesn't know about alignas().  A struct member
+	# using alignas() ends up being treated as the variable name of
+	# the preceding member's declaration and gets indented to the
+	# declaration column.  Disguise alignas(...) as a plain identifier
+	# to avoid that.
+	$source =~ s!\balignas\(([^()\n]*)\)!alignas_${1}_!g;
+
 	return $source;
 }
 
 sub post_indent
 {
 	my $source = shift;
+
+	# Restore alignas(...)
+	$source =~ s!\balignas_(.*?)_(?=\s)!alignas($1)!g;
 
 	# Restore CATALOG lines
 	$source =~ s!^/\*(CATALOG\(.*)\*/$!$1!gm;
