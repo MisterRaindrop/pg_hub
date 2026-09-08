@@ -88,14 +88,27 @@ PG_FUNCTION_INFO_V1(test_random_offset_operations);
 
 /* Encode/Decode to/from TEXT and Bitmapset */
 #define BITMAPSET_TO_TEXT(bms) cstring_to_text(nodeToString(bms))
-#define TEXT_TO_BITMAPSET(str) ((Bitmapset *) stringToNode(text_to_cstring(str)))
+
+static Bitmapset *
+text_to_bitmapset(text *arg)
+{
+    Node *node;
+
+    node = stringToNode(text_to_cstring(arg));
+
+    if (node != NULL && !IsA(node, Bitmapset))
+        ereport(ERROR,
+                (errmsg("input is not a Bitmapset")));
+
+    return (Bitmapset *) node;
+}
 
 /*
  * Helper macro to fetch text parameters as Bitmapsets. SQL-NULL means empty
  * set.
  */
 #define PG_ARG_GETBITMAPSET(n) \
-	(PG_ARGISNULL(n) ? NULL : TEXT_TO_BITMAPSET(PG_GETARG_TEXT_PP(n)))
+	(PG_ARGISNULL(n) ? NULL : text_to_bitmapset(PG_GETARG_TEXT_PP(n)))
 
 /*
  * Helper macro to handle converting sets back to text, returning the
