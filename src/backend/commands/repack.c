@@ -874,8 +874,7 @@ check_concurrent_repack_requirements(Relation rel, Oid *ident_idx_p)
 				errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				errmsg("cannot execute %s in this configuration",
 					   "REPACK (CONCURRENTLY)"),
-				errdetail("%s requires \"wal_level\" to be set to \"replica\" or higher.",
-						  "REPACK (CONCURRENTLY)"));
+				errdetail("This operation requires \"wal_level\" to be set to \"replica\" or higher."));
 
 	/* Data changes in system relations are not logically decoded. */
 	if (IsCatalogRelation(rel))
@@ -883,8 +882,7 @@ check_concurrent_repack_requirements(Relation rel, Oid *ident_idx_p)
 				errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				errmsg("cannot execute %s on relation \"%s\"",
 					   "REPACK (CONCURRENTLY)", RelationGetRelationName(rel)),
-				errhint("%s is not supported for catalog relations.",
-						"REPACK (CONCURRENTLY)"));
+				errdetail("This operation is not supported for system catalogs."));
 
 	/*
 	 * REPACK (CONCURRENTLY) is not MVCC-safe; it doesn't preserve visibility
@@ -908,8 +906,7 @@ check_concurrent_repack_requirements(Relation rel, Oid *ident_idx_p)
 				errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				errmsg("cannot execute %s on relation \"%s\"",
 					   "REPACK (CONCURRENTLY)", RelationGetRelationName(rel)),
-				errhint("%s is not supported for TOAST relations.",
-						"REPACK (CONCURRENTLY)"));
+				errdetail("This operation is not supported for TOAST tables."));
 
 	relpersistence = rel->rd_rel->relpersistence;
 	if (relpersistence != RELPERSISTENCE_PERMANENT)
@@ -917,8 +914,7 @@ check_concurrent_repack_requirements(Relation rel, Oid *ident_idx_p)
 				errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				errmsg("cannot execute %s on relation \"%s\"",
 					   "REPACK (CONCURRENTLY)", RelationGetRelationName(rel)),
-				errhint("%s is only allowed for permanent relations.",
-						"REPACK (CONCURRENTLY)"));
+				errdetail("This operation is only supported for permanent relations."));
 
 	/*
 	 * With NOTHING, WAL does not contain the old tuple; FULL is not yet
@@ -931,8 +927,7 @@ check_concurrent_repack_requirements(Relation rel, Oid *ident_idx_p)
 				errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				errmsg("cannot execute %s on relation \"%s\"",
 					   "REPACK (CONCURRENTLY)", RelationGetRelationName(rel)),
-				errdetail("%s does not support tables with %s.",
-						  "REPACK (CONCURRENTLY)",
+				errdetail("This operation does not support tables with %s.",
 						  replident == REPLICA_IDENTITY_NOTHING ?
 						  "REPLICA IDENTITY NOTHING" : "REPLICA IDENTITY FULL"));
 
@@ -953,16 +948,15 @@ check_concurrent_repack_requirements(Relation rel, Oid *ident_idx_p)
 					errmsg("cannot execute %s on relation \"%s\"",
 						   "REPACK (CONCURRENTLY)",
 						   RelationGetRelationName(rel)),
-					errdetail("%s does not support deferrable primary keys.",
-							  "REPACK (CONCURRENTLY)"),
+					errdetail("This operation does not support deferrable primary keys."),
 					errhint("Use ALTER TABLE ... REPLICA IDENTITY USING INDEX to designate another index as replica identity."));
 
 		ereport(ERROR,
 				errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				errmsg("cannot execute %s on relation \"%s\"",
 					   "REPACK (CONCURRENTLY)", RelationGetRelationName(rel)),
-				errhint("Relation \"%s\" has no identity index.",
-						RelationGetRelationName(rel)));
+				errdetail("Relation \"%s\" has no identity index.",
+						  RelationGetRelationName(rel)));
 	}
 
 	*ident_idx_p = ident_idx;
