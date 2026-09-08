@@ -676,7 +676,7 @@ static void RememberConstraintForRebuilding(Oid conoid, AlteredTableInfo *tab);
 static void RememberIndexForRebuilding(Oid indoid, AlteredTableInfo *tab);
 static void RememberStatisticsForRebuilding(Oid stxoid, AlteredTableInfo *tab);
 static void ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab,
-								   LOCKMODE lockmode);
+								   LOCKMODE lockmode, AlterTablePass pass);
 static void ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, Oid ownerId,
 								 char *cmd, List **wqueue, LOCKMODE lockmode,
 								 bool rewrite);
@@ -5410,7 +5410,7 @@ ATRewriteCatalogs(List **wqueue, LOCKMODE lockmode,
 			 * done only once if multiple columns of a table are altered).
 			 */
 			if (pass == AT_PASS_ALTER_TYPE || pass == AT_PASS_SET_EXPRESSION)
-				ATPostAlterTypeCleanup(wqueue, tab, lockmode);
+				ATPostAlterTypeCleanup(wqueue, tab, lockmode, pass);
 
 			if (tab->rel)
 			{
@@ -16096,12 +16096,14 @@ RememberStatisticsForRebuilding(Oid stxoid, AlteredTableInfo *tab)
 /*
  * Cleanup after we've finished all the ALTER TYPE or SET EXPRESSION
  * operations for a particular relation.  We have to drop and recreate all the
- * indexes and constraints that depend on the altered columns.  We do the
- * actual dropping here, but re-creation is managed by adding work queue
- * entries to do those steps later.
+ * indexes and constraints that depend on the altered columns, except that
+ * CHECK and NOT NULL constraints only need revalidation after SET EXPRESSION.
+ * We do the actual dropping here, but re-creation is managed by adding work
+ * queue entries to do those steps later.
  */
 static void
-ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
+ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode,
+					   AlterTablePass pass)
 {
 	ObjectAddress obj;
 	ObjectAddresses *objects;
@@ -16146,6 +16148,45 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 		if (!HeapTupleIsValid(tup)) /* should not happen */
 			elog(ERROR, "cache lookup failed for constraint %u", oldId);
 		con = (Form_pg_constraint) GETSTRUCT(tup);
+
+		/*
+		 * SET EXPRESSION does not change CHECK or NOT NULL definitions. Keep
+		 * these constraints and recheck existing rows as needed. This avoids
+		 * losing inherited constraints when only a child is altered.
+		 */
+		if (pass == AT_PASS_SET_EXPRESSION &&
+			(con->contype == CONSTRAINT_CHECK ||
+			 con->contype == CONSTRAINT_NOTNULL) && OidIsValid(con->conrelid))
+		{
+			/*
+			 * Valid NOT NULL constraints are already checked in Phase 3.
+			 * Invalid constraints are skipped.
+			 */
+			if (con->contype == CONSTRAINT_CHECK &&
+				con->conenforced && con->convalidated)
+			{
+				NewConstraint *newcon = palloc0_object(NewConstraint);
+				Relation	conrel;
+				AlteredTableInfo *contab;
+				Datum		conbin;
+
+				/* The constraint can belong to another table. */
+				conrel = table_open(con->conrelid, AccessExclusiveLock);
+				contab = ATGetQueueEntry(wqueue, conrel);
+				newcon->name = pstrdup(NameStr(con->conname));
+				newcon->contype = CONSTR_CHECK;
+				newcon->conid = con->oid;
+				conbin = SysCacheGetAttrNotNull(CONSTROID, tup,
+												Anum_pg_constraint_conbin);
+				/* Virtual generated columns are expanded in Phase 3. */
+				newcon->qual = stringToNode(TextDatumGetCString(conbin));
+				contab->constraints = lappend(contab->constraints, newcon);
+				table_close(conrel, NoLock);
+			}
+			ReleaseSysCache(tup);
+			continue;
+		}
+
 		if (OidIsValid(con->conrelid))
 			relid = con->conrelid;
 		else

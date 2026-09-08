@@ -346,6 +346,78 @@ INSERT INTO gtest20b (a) VALUES (30);
 ALTER TABLE gtest20b ADD CONSTRAINT chk CHECK (b < 50) NOT VALID;
 ALTER TABLE gtest20b VALIDATE CONSTRAINT chk;  -- fails on existing row
 
+-- SET EXPRESSION must preserve inherited CHECK and NOT NULL constraints.
+CREATE TABLE gtest_check_parent (a int, b int GENERATED ALWAYS AS (a * 2) VIRTUAL
+                               CONSTRAINT inherited_not_null NOT NULL,
+                               CONSTRAINT inherited_check CHECK (b < 100));
+CREATE TABLE gtest_check_child () INHERITS (gtest_check_parent);
+INSERT INTO gtest_check_child (a) VALUES (40);
+ALTER TABLE gtest_check_child ALTER COLUMN b SET EXPRESSION AS (a * 3); -- error
+SELECT * FROM gtest_check_child;
+ALTER TABLE gtest_check_child ALTER COLUMN b SET EXPRESSION AS (NULL::int); -- error
+ALTER TABLE gtest_check_child ALTER COLUMN b SET EXPRESSION AS (a + 1);
+INSERT INTO gtest_check_child (a) VALUES (1000); -- error
+INSERT INTO gtest_check_child (a) VALUES (NULL); -- error
+SELECT contype, conislocal, coninhcount FROM pg_constraint
+  WHERE conrelid = 'gtest_check_child'::regclass ORDER BY contype;
+ALTER TABLE gtest_check_parent ALTER COLUMN b SET EXPRESSION AS (a + 2);
+SELECT * FROM gtest_check_child;
+SELECT conrelid::regclass, contype, conislocal, coninhcount, convalidated
+  FROM pg_constraint
+  WHERE conrelid IN ('gtest_check_parent'::regclass, 'gtest_check_child'::regclass)
+  ORDER BY conrelid::regclass::text, contype;
+DROP TABLE gtest_check_child, gtest_check_parent;
+
+-- The same applies when altering a partition directly.
+CREATE TABLE gtest_check_parent (a int, b int GENERATED ALWAYS AS (a * 2) VIRTUAL
+                               CONSTRAINT inherited_not_null NOT NULL,
+                               CONSTRAINT inherited_check CHECK (b < 100))
+  PARTITION BY RANGE (a);
+CREATE TABLE gtest_check_child PARTITION OF gtest_check_parent DEFAULT;
+INSERT INTO gtest_check_parent (a) VALUES (40);
+ALTER TABLE gtest_check_child ALTER COLUMN b SET EXPRESSION AS (a * 3); -- error
+ALTER TABLE gtest_check_child ALTER COLUMN b SET EXPRESSION AS (NULL::int); -- error
+ALTER TABLE gtest_check_child ALTER COLUMN b SET EXPRESSION AS (a + 1);
+INSERT INTO gtest_check_parent (a) VALUES (1000); -- error
+INSERT INTO gtest_check_parent (a) VALUES (NULL); -- error
+SELECT contype, conislocal, coninhcount FROM pg_constraint
+  WHERE conrelid = 'gtest_check_child'::regclass ORDER BY contype;
+ALTER TABLE gtest_check_parent ALTER COLUMN b SET EXPRESSION AS (a * 3); -- error
+ALTER TABLE gtest_check_parent ALTER COLUMN b SET EXPRESSION AS (a + 2);
+SELECT * FROM gtest_check_child;
+SELECT conrelid::regclass, contype, conislocal, coninhcount, convalidated
+  FROM pg_constraint
+  WHERE conrelid IN ('gtest_check_parent'::regclass, 'gtest_check_child'::regclass)
+  ORDER BY conrelid::regclass::text, contype;
+DROP TABLE gtest_check_parent;
+
+-- Do not validate NOT VALID or NOT ENFORCED checks during SET EXPRESSION.
+CREATE TABLE gtest_check (a int, b int GENERATED ALWAYS AS (a * 2) VIRTUAL);
+INSERT INTO gtest_check (a) VALUES (40);
+ALTER TABLE gtest_check ADD CONSTRAINT invalid_check CHECK (b < 10) NOT VALID;
+ALTER TABLE gtest_check ADD CONSTRAINT unenforced_check CHECK (b < 10) NOT ENFORCED;
+ALTER TABLE gtest_check ALTER COLUMN b SET EXPRESSION AS (a * 3);
+SELECT conname, convalidated, conenforced
+  FROM pg_constraint WHERE conrelid = 'gtest_check'::regclass ORDER BY conname;
+DROP TABLE gtest_check;
+
+-- SET EXPRESSION must not validate an invalid NOT NULL constraint.
+CREATE TABLE gtest_nn_invalid (a int, b int GENERATED ALWAYS AS (a) VIRTUAL);
+INSERT INTO gtest_nn_invalid (a) VALUES (NULL);
+ALTER TABLE gtest_nn_invalid ADD CONSTRAINT nn NOT NULL b NOT VALID;
+ALTER TABLE gtest_nn_invalid ALTER COLUMN b SET EXPRESSION AS (a + 1);
+SELECT b IS NULL AS existing_null FROM gtest_nn_invalid;
+SELECT attnotnull, convalidated FROM pg_attribute a JOIN pg_constraint c
+  ON c.conrelid = a.attrelid AND c.conkey = ARRAY[a.attnum]
+  WHERE a.attrelid = 'gtest_nn_invalid'::regclass AND a.attname = 'b';
+INSERT INTO gtest_nn_invalid (a) VALUES (NULL); -- error
+UPDATE gtest_nn_invalid SET a = a; -- error
+ALTER TABLE gtest_nn_invalid VALIDATE CONSTRAINT nn; -- error
+UPDATE gtest_nn_invalid SET a = 1;
+ALTER TABLE gtest_nn_invalid VALIDATE CONSTRAINT nn;
+SELECT convalidated FROM pg_constraint WHERE conrelid = 'gtest_nn_invalid'::regclass;
+DROP TABLE gtest_nn_invalid;
+
 -- check with whole-row reference
 CREATE TABLE gtest20c (a int, b int GENERATED ALWAYS AS (a * 2) VIRTUAL);
 ALTER TABLE gtest20c ADD CONSTRAINT whole_row_check CHECK (gtest20c IS NOT NULL);
