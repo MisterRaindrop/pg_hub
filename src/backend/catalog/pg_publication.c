@@ -57,19 +57,13 @@ static void
 check_publication_add_relation(PublicationRelInfo *pri)
 {
 	Relation	targetrel = pri->relation;
-	const char *relname;
+	const char *relname = RelationGetQualifiedRelationName(targetrel);
 	const char *errormsg;
 
 	if (pri->except)
-	{
-		relname = RelationGetQualifiedRelationName(targetrel);
 		errormsg = gettext_noop("cannot specify relation \"%s\" in the publication EXCEPT clause");
-	}
 	else
-	{
-		relname = RelationGetRelationName(targetrel);
 		errormsg = gettext_noop("cannot add relation \"%s\" to publication");
-	}
 
 	/* If in EXCEPT clause, must be root partitioned table */
 	if (pri->except && targetrel->rd_rel->relispartition)
