@@ -362,6 +362,18 @@ DOTypeNameCompare(const void *p1, const void *p2)
 						pobj2->poltable->dobj.name);
 		if (cmpval != 0)
 			return cmpval;
+
+		/*
+		 * getPolicies() represents "RLS is enabled on this table" as a
+		 * PolicyInfo with null polname whose dobj.name is the table's relname.
+		 * Policy names live in a per-table namespace disjoint from relation
+		 * names, so such a marker ties with a real policy of that same name on
+		 * that same table; whether polname is null is then the only remaining
+		 * natural-key field.  Sort the marker first.
+		 */
+		cmpval = (pobj1->polname != NULL) - (pobj2->polname != NULL);
+		if (cmpval != 0)
+			return cmpval;
 	}
 	else if (obj1->objType == DO_RULE)
 	{

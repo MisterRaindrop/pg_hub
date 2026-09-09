@@ -15,11 +15,14 @@
 #include "commands/seclabel.h"
 #include "fmgr.h"
 #include "miscadmin.h"
+#include "utils/guc.h"
 #include "utils/rel.h"
 
 PG_MODULE_MAGIC;
 
 PG_FUNCTION_INFO_V1(dummy_seclabel_dummy);
+
+static bool dummy_seclabel_second_provider = false;
 
 static void
 dummy_object_relabel(const ObjectAddress *object, const char *seclabel)
@@ -47,6 +50,29 @@ void
 _PG_init(void)
 {
 	register_label_provider("dummy", dummy_object_relabel);
+
+	/*
+	 * Optionally register a second provider.  Tests that need two providers
+	 * registered at the same time turn this on before the module is loaded.
+	 * It defaults to off, so that the provider-less "SECURITY LABEL ON ... IS
+	 * ..." syntax, which requires exactly one registered provider, keeps
+	 * working.
+	 */
+	DefineCustomBoolVariable("dummy_seclabel.second_provider",
+							 "Also register a \"dummy2\" label provider.",
+							 NULL,
+							 &dummy_seclabel_second_provider,
+							 false,
+							 PGC_SUSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	MarkGUCPrefixReserved("dummy_seclabel");
+
+	if (dummy_seclabel_second_provider)
+		register_label_provider("dummy2", dummy_object_relabel);
 }
 
 /*
