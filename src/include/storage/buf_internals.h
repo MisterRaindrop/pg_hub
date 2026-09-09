@@ -242,25 +242,18 @@ BufTagMatchesRelFileLocator(const BufferTag *tag,
  * The shared buffer mapping table is partitioned to reduce contention.
  * To determine which partition lock a given tag requires, compute the tag's
  * hash code with BufTableHashCode(), then apply BufMappingPartitionLock().
- * NB: NUM_BUFFER_PARTITIONS must be a power of 2!
+ * 
  */
-static inline uint32
-BufTableHashPartition(uint32 hashcode)
-{
-	return hashcode % NUM_BUFFER_PARTITIONS;
-}
 
 static inline LWLock *
-BufMappingPartitionLock(uint32 hashcode)
+BufMappingPartitionLock(uint32 hashcode, LWLockMode mode)
 {
-	return &MainLWLockArray[BUFFER_MAPPING_LWLOCK_OFFSET +
-							BufTableHashPartition(hashcode)].lock;
-}
-
-static inline LWLock *
-BufMappingPartitionLockByIndex(uint32 index)
-{
-	return &MainLWLockArray[BUFFER_MAPPING_LWLOCK_OFFSET + index].lock;
+	int p = BUFFER_MAPPING_LWLOCK_OFFSET + (hashcode % NUM_BUFFER_PARTITIONS);
+	LWLock *lock = &MainLWLockArray[p].lock;
+	if(mode == LW_EXCLUSIVE)
+		mode += LW_LOCK_ROOM_ALPHA(hashcode >> LOG2_NUM_BUFFER_PARTITIONS);
+	LWLockAcquire(lock, mode);
+	return lock;
 }
 
 /*
