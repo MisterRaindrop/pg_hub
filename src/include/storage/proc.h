@@ -287,6 +287,7 @@ typedef struct PGPROC
 	 * is acceptable, although not pretty, because a backend can't wait for
 	 * both types of locks at the same time.
 	 */
+	uint32		lwLockRoom;		/* lock room being waited for */
 	uint8		lwWaiting;		/* see LWLockWaitState */
 	uint8		lwWaitMode;		/* lwlock mode being waited for */
 	proclist_node lwWaitLink;	/* position in LW lock wait list */

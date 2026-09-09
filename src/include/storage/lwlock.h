@@ -31,7 +31,8 @@ typedef enum LWLockWaitState
 	LW_WS_WAITING,				/* currently waiting */
 	LW_WS_PENDING_WAKEUP,		/* removed from waitlist, but not yet
 								 * signalled */
-}			LWLockWaitState;
+} LWLockWaitState;
+
 
 /*
  * Code outside of lwlock.c should not manipulate the contents of this
@@ -80,8 +81,8 @@ extern PGDLLIMPORT LWLockPadded *MainLWLockArray;
  */
 
 /* Number of partitions of the shared buffer mapping hashtable */
-#define NUM_BUFFER_PARTITIONS  128
-
+#define LOG2_NUM_BUFFER_PARTITIONS 7
+#define NUM_BUFFER_PARTITIONS  (1 << LOG2_NUM_BUFFER_PARTITIONS)
 /* Number of partitions the shared lock tables are divided into */
 #define LOG2_NUM_LOCK_PARTITIONS  4
 #define NUM_LOCK_PARTITIONS  (1 << LOG2_NUM_LOCK_PARTITIONS)
@@ -101,14 +102,90 @@ extern PGDLLIMPORT LWLockPadded *MainLWLockArray;
 
 typedef enum LWLockMode
 {
-	LW_EXCLUSIVE,
-	LW_SHARED,
-	LW_WAIT_UNTIL_FREE,			/* A special mode used in PGPROC->lwWaitMode,
-								 * when waiting for lock to become free. Not
-								 * to be used as LWLockAcquire argument */
+	LW_EXCLUSIVE = 1,
+	LW_SHARED = 2,
+	/* A special mode used in PGPROC->lwWaitMode,
+	 * when waiting for lock to become free. Not
+	 * to be used as LWLockAcquire argument */
+	LW_WAIT_UNTIL_FREE = 4,
+	/* For backward compatibility LW_EXCLUSIVE must
+	 * act as LW_EXCLUSIVE + LW_LOCK_ROOM_MASK
+	 */
+	/* 16 rooms in two internal bytes */
+	LW_LOCK_ROOM_0 	  = 0x00000100,
+	LW_LOCK_ROOM_1 	  = 0x00000200,
+	LW_LOCK_ROOM_2 	  = 0x00000400,
+	LW_LOCK_ROOM_3 	  = 0x00000800,
+	LW_LOCK_ROOM_4 	  = 0x00001000,
+	LW_LOCK_ROOM_5 	  = 0x00002000,
+	LW_LOCK_ROOM_6 	  = 0x00004000,
+	LW_LOCK_ROOM_7 	  = 0x00008000,
+
+	LW_LOCK_ROOM_8 	  = 0x00010000,
+	LW_LOCK_ROOM_9 	  = 0x00020000,
+	LW_LOCK_ROOM_10	  = 0x00040000,
+	LW_LOCK_ROOM_11	  = 0x00080000,
+	LW_LOCK_ROOM_12	  = 0x00100000,
+	LW_LOCK_ROOM_13	  = 0x00200000,
+	LW_LOCK_ROOM_14	  = 0x00400000,
+	LW_LOCK_ROOM_15	  = 0x00800000,
+	/*
+	 * Alternatively use A-Z, where 5+5 rooms are bits of the
+	 * least and the most significant bytes.
+	 * F-U coincide with 1-15.
+	 */
+	LW_LOCK_ROOM_A    = 0x00000008,
+	LW_LOCK_ROOM_B    = 0x00000010,
+	LW_LOCK_ROOM_C    = 0x00000020,
+	LW_LOCK_ROOM_D    = 0x00000040,
+	LW_LOCK_ROOM_E    = 0x00000080,
+
+	LW_LOCK_ROOM_F 	  = 0x00000100,
+	LW_LOCK_ROOM_G 	  = 0x00000200,
+	LW_LOCK_ROOM_H 	  = 0x00000400,
+	LW_LOCK_ROOM_I 	  = 0x00000800,
+	LW_LOCK_ROOM_J 	  = 0x00001000,
+	LW_LOCK_ROOM_K 	  = 0x00002000,
+	LW_LOCK_ROOM_L 	  = 0x00004000,
+	LW_LOCK_ROOM_M 	  = 0x00008000,
+
+	LW_LOCK_ROOM_N 	  = 0x00010000,
+	LW_LOCK_ROOM_O 	  = 0x00020000,
+	LW_LOCK_ROOM_P	  = 0x00040000,
+	LW_LOCK_ROOM_Q	  = 0x00080000,
+	LW_LOCK_ROOM_R	  = 0x00100000,
+	LW_LOCK_ROOM_S	  = 0x00200000,
+	LW_LOCK_ROOM_T	  = 0x00400000,
+	LW_LOCK_ROOM_U	  = 0x00800000,
+
+	LW_LOCK_ROOM_V    = 0x01000000,
+	LW_LOCK_ROOM_W    = 0x02000000,
+	LW_LOCK_ROOM_X    = 0x04000000,
+	LW_LOCK_ROOM_Y    = 0x08000000,
+	LW_LOCK_ROOM_Z    = 0x10000000,
+
+	/*
+	 * 3 high bits reserved for flags in LWLock state
+	 * 3 low bits reserved for modes in LWLockMode
+	 * 26 bits usable as room mask.
+	 */
+	LW_LOCK_ROOM_MASK = 0x1ffffff8,
+	LW_LOCK_MODE_MASK = 0x00000007,
 } LWLockMode;
 
 
+/*
+ * A helper to acquire the lock for one room out of 16
+ * LW_EXCLUSIVE + LW_LOCK_ROOM(3)
+ * LW_EXCLUSIVE + LW_ROOM_3
+ */
+#define LW_LOCK_ROOM(i)		((LWLockMode) (1 << (8 + ((i) & 0xF))))
+/* Alternatively one can lock one room out of 26
+ * LW_EXCLUSIVE + LW_LOCK_ROOM_ALPHA('A')
+ * LW_EXCLUSIVE + LW_LOCK_ROOM_ALPHA(12345)
+ * LW_EXCLUSIVE + LW_LOCK_ROOM_A
+ */
+#define LW_LOCK_ROOM_ALPHA(i)	((LWLockMode) (1 << (3 + ((i) - 65) % 26)))
 #ifdef LOCK_DEBUG
 extern PGDLLIMPORT bool Trace_lwlocks;
 #endif

@@ -46,7 +46,7 @@
  *
  * For lock acquisition we use an atomic compare-and-exchange on the lockcount
  * variable. For exclusive lock we swap in a sentinel value
- * (LW_VAL_EXCLUSIVE), for shared locks we count the number of holders.
+ * (LW_EXCLUSIVE), for shared locks we count the number of holders.
  *
  * To release the lock we use an atomic decrement to release the lock. If the
  * new value is zero (we get that atomically), we know we can/have to release
@@ -100,13 +100,9 @@
 #define LW_FLAG_MASK				(((1<<LW_FLAG_BITS)-1)<<(32-LW_FLAG_BITS))
 
 /* assumes MAX_BACKENDS is a (power of 2) - 1, checked below */
-#define LW_VAL_EXCLUSIVE			(MAX_BACKENDS + 1)
-#define LW_VAL_SHARED				1
-
 /* already (power of 2)-1, i.e. suitable for a mask */
-#define LW_SHARED_MASK				MAX_BACKENDS
-#define LW_LOCK_MASK				(MAX_BACKENDS | LW_VAL_EXCLUSIVE)
-
+#define LW_SHARED_MASK				(MAX_BACKENDS << 1)
+#define LW_LOCK_MASK				(LW_SHARED_MASK | LW_EXCLUSIVE)
 
 StaticAssertDecl(((MAX_BACKENDS + 1) & MAX_BACKENDS) == 0,
 				 "MAX_BACKENDS + 1 needs to be a power of 2");
@@ -114,8 +110,11 @@ StaticAssertDecl(((MAX_BACKENDS + 1) & MAX_BACKENDS) == 0,
 StaticAssertDecl((MAX_BACKENDS & LW_FLAG_MASK) == 0,
 				 "MAX_BACKENDS and LW_FLAG_MASK overlap");
 
-StaticAssertDecl((LW_VAL_EXCLUSIVE & LW_FLAG_MASK) == 0,
-				 "LW_VAL_EXCLUSIVE and LW_FLAG_MASK overlap");
+StaticAssertDecl((LW_EXCLUSIVE & LW_FLAG_MASK) == 0,
+				 "LW_EXCLUSIVE and LW_FLAG_MASK overlap");
+
+StaticAssertDecl((LW_LOCK_ROOM_MASK & LW_FLAG_MASK) == 0,
+				 "LW_LOCK_ROOM_MASK and LW_FLAG_MASK overlap");
 
 /*
  * There are three sorts of LWLock "tranches":
@@ -267,7 +266,7 @@ PRINT_LWDEBUG(const char *where, LWLock *lock, LWLockMode mode)
 				 errmsg_internal("%d: %s(%s %p): excl %u shared %u haswaiters %u waiters %u waking %d",
 								 MyProcPid,
 								 where, T_NAME(lock), lock,
-								 (state & LW_VAL_EXCLUSIVE) != 0,
+								 (state & LW_EXCLUSIVE) != 0,
 								 state & LW_SHARED_MASK,
 								 (state & LW_FLAG_HAS_WAITERS) != 0,
 								 pg_atomic_read_u32(&lock->nwaiters),
@@ -765,7 +764,7 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode)
 {
 	uint32		old_state;
 
-	Assert(mode == LW_EXCLUSIVE || mode == LW_SHARED);
+	Assert(mode == LW_SHARED || (mode & LW_LOCK_MODE_MASK) == LW_EXCLUSIVE);
 
 	/*
 	 * Read once outside the loop, later iterations will get the newer value
@@ -781,17 +780,24 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode)
 
 		desired_state = old_state;
 
-		if (mode == LW_EXCLUSIVE)
+		if ((mode & LW_LOCK_MODE_MASK) == LW_EXCLUSIVE)
 		{
-			lock_free = (old_state & LW_LOCK_MASK) == 0;
+			uint32 rooms = mode & LW_LOCK_ROOM_MASK;
+			Assert(rooms != 0);
+
+			if (old_state & LW_EXCLUSIVE)
+				lock_free = (old_state & rooms) == 0;           /* rooms vs rooms */
+			else
+				lock_free = (old_state & LW_SHARED_MASK) == 0;  /* any shared count blocks */
+
 			if (lock_free)
-				desired_state += LW_VAL_EXCLUSIVE;
+				desired_state |= LW_EXCLUSIVE | rooms;
 		}
 		else
 		{
-			lock_free = (old_state & LW_VAL_EXCLUSIVE) == 0;
+			lock_free = (old_state & LW_EXCLUSIVE) == 0;
 			if (lock_free)
-				desired_state += LW_VAL_SHARED;
+				desired_state += LW_SHARED;
 		}
 
 		/*
@@ -811,7 +817,7 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode)
 			{
 				/* Great! Got the lock. */
 #ifdef LOCK_DEBUG
-				if (mode == LW_EXCLUSIVE)
+				if ((mode & LW_LOCK_MODE_MASK) == LW_EXCLUSIVE)
 					lock->owner = MyProc;
 #endif
 				return false;
@@ -903,8 +909,10 @@ LWLockWaitListUnlock(LWLock *lock)
 static void
 LWLockWakeup(LWLock *lock)
 {
+	/* will be set to LW_EXCLUSIVE or LW_SHARED later */
+	LWLockMode	awaking_mode = LW_WAIT_UNTIL_FREE;
 	bool		new_wake_in_progress = false;
-	bool		wokeup_somebody = false;
+	uint32		held_rooms = 0;
 	proclist_head wakeup;
 	proclist_mutable_iter iter;
 
@@ -913,11 +921,25 @@ LWLockWakeup(LWLock *lock)
 	/* lock wait list while collecting backends to wake up */
 	LWLockWaitListLock(lock);
 
+	{
+		uint32		state = pg_atomic_read_u32(&lock->state);
+
+		if (state & LW_EXCLUSIVE)
+			held_rooms = state & LW_LOCK_ROOM_MASK;
+	}
+
 	proclist_foreach_modify(iter, &lock->waiters, lwWaitLink)
 	{
 		PGPROC	   *waiter = GetPGProcByNumber(iter.cur);
 
-		if (wokeup_somebody && waiter->lwWaitMode == LW_EXCLUSIVE)
+		/*
+		 * Don't mix LW_SHARED and LW_EXCLUSIVE
+		 */
+		if (new_wake_in_progress && waiter->lwWaitMode != awaking_mode)
+			continue;
+
+		if (waiter->lwWaitMode == LW_EXCLUSIVE &&
+			(waiter->lwLockRoom & held_rooms) != 0)
 			continue;
 
 		proclist_delete(&lock->waiters, iter.cur, lwWaitLink);
@@ -931,11 +953,7 @@ LWLockWakeup(LWLock *lock)
 			 * automatically.
 			 */
 			new_wake_in_progress = true;
-
-			/*
-			 * Don't wakeup (further) exclusive locks.
-			 */
-			wokeup_somebody = true;
+			awaking_mode = waiter->lwWaitMode;
 		}
 
 		/*
@@ -947,12 +965,17 @@ LWLockWakeup(LWLock *lock)
 		Assert(waiter->lwWaiting == LW_WS_WAITING);
 		waiter->lwWaiting = LW_WS_PENDING_WAKEUP;
 
-		/*
-		 * Once we've woken up an exclusive lock, there's no point in waking
-		 * up anybody else.
-		 */
 		if (waiter->lwWaitMode == LW_EXCLUSIVE)
-			break;
+		{
+			held_rooms |= waiter->lwLockRoom;
+
+			/*
+			 * Once we've woken up an exclusive lock that covers all remaining
+			 * rooms, there's no point in waking up anybody else.
+			 */
+			if (held_rooms == LW_LOCK_ROOM_MASK)
+				break;
+		}
 	}
 
 	Assert(proclist_is_empty(&wakeup) || pg_atomic_read_u32(&lock->state) & LW_FLAG_HAS_WAITERS);
@@ -1025,7 +1048,20 @@ LWLockQueueSelf(LWLock *lock, LWLockMode mode)
 	if (MyProc == NULL)
 		elog(PANIC, "cannot wait without a PGPROC structure");
 
-	if (MyProc->lwWaiting != LW_WS_NOT_WAITING)
+	if (MyProc->lwWaiting == LW_WS_PENDING_WAKEUP)
+	{
+		/*
+		 * Woken but not yet signalled; wait like LWLockDequeueSelf() so we
+		 * never re-queue while still in a wakeup handoff.
+		 */
+		for (;;)
+		{
+			PGSemaphoreLock(MyProc->sem);
+			if (MyProc->lwWaiting == LW_WS_NOT_WAITING)
+				break;
+		}
+	}
+	else if (MyProc->lwWaiting != LW_WS_NOT_WAITING)
 		elog(PANIC, "queueing for lock while waiting on another one");
 
 	LWLockWaitListLock(lock);
@@ -1034,10 +1070,11 @@ LWLockQueueSelf(LWLock *lock, LWLockMode mode)
 	pg_atomic_fetch_or_u32(&lock->state, LW_FLAG_HAS_WAITERS);
 
 	MyProc->lwWaiting = LW_WS_WAITING;
-	MyProc->lwWaitMode = mode;
+	MyProc->lwWaitMode = mode & LW_LOCK_MODE_MASK;
+	MyProc->lwLockRoom = mode & LW_LOCK_ROOM_MASK;
 
 	/* LW_WAIT_UNTIL_FREE waiters are always at the front of the queue */
-	if (mode == LW_WAIT_UNTIL_FREE)
+	if ((mode & LW_LOCK_MODE_MASK) == LW_WAIT_UNTIL_FREE)
 		proclist_push_head(&lock->waiters, MyProcNumber, lwWaitLink);
 	else
 		proclist_push_tail(&lock->waiters, MyProcNumber, lwWaitLink);
@@ -1158,13 +1195,15 @@ LWLockAcquire(LWLock *lock, LWLockMode mode)
 	lwstats = get_lwlock_stats_entry(lock);
 #endif
 
-	Assert(mode == LW_SHARED || mode == LW_EXCLUSIVE);
-
+	Assert(mode == LW_SHARED || (mode & LW_LOCK_MODE_MASK) == LW_EXCLUSIVE);
+	/* assume all rooms on an exclusive lock if omitted */
+	if (mode == LW_EXCLUSIVE)
+		mode |= LW_LOCK_ROOM_MASK;
 	PRINT_LWDEBUG("LWLockAcquire", lock, mode);
 
 #ifdef LWLOCK_STATS
 	/* Count lock acquisition attempts */
-	if (mode == LW_EXCLUSIVE)
+	if ((mode & LW_LOCK_MODE_MASK) == LW_EXCLUSIVE)
 		lwstats->ex_acquire_count++;
 	else
 		lwstats->sh_acquire_count++;
@@ -1322,7 +1361,11 @@ LWLockConditionalAcquire(LWLock *lock, LWLockMode mode)
 {
 	bool		mustwait;
 
-	Assert(mode == LW_SHARED || mode == LW_EXCLUSIVE);
+	Assert(mode == LW_SHARED || (mode & LW_LOCK_MODE_MASK) == LW_EXCLUSIVE);
+
+	/* assume all rooms on an exclusive lock if omitted */
+	if (mode == LW_EXCLUSIVE)
+		mode |= LW_LOCK_ROOM_MASK;
 
 	PRINT_LWDEBUG("LWLockConditionalAcquire", lock, mode);
 
@@ -1386,7 +1429,11 @@ LWLockAcquireOrWait(LWLock *lock, LWLockMode mode)
 	lwstats = get_lwlock_stats_entry(lock);
 #endif
 
-	Assert(mode == LW_SHARED || mode == LW_EXCLUSIVE);
+	Assert(mode == LW_SHARED || (mode & LW_LOCK_MODE_MASK) == LW_EXCLUSIVE);
+
+	/* assume all rooms on an exclusive lock if omitted */
+	if (mode == LW_EXCLUSIVE)
+		mode |= LW_LOCK_ROOM_MASK;
 
 	PRINT_LWDEBUG("LWLockAcquireOrWait", lock, mode);
 
@@ -1516,7 +1563,7 @@ LWLockConflictsWithVar(LWLock *lock, pg_atomic_uint64 *valptr, uint64 oldval,
 	 * this, so we don't need a memory barrier here as far as the current
 	 * usage is concerned.  But that might not be safe in general.
 	 */
-	mustwait = (pg_atomic_read_u32(&lock->state) & LW_VAL_EXCLUSIVE) != 0;
+	mustwait = (pg_atomic_read_u32(&lock->state) & LW_EXCLUSIVE) != 0;
 
 	if (!mustwait)
 	{
@@ -1716,7 +1763,7 @@ LWLockUpdateVar(LWLock *lock, pg_atomic_uint64 *valptr, uint64 val)
 
 	LWLockWaitListLock(lock);
 
-	Assert(pg_atomic_read_u32(&lock->state) & LW_VAL_EXCLUSIVE);
+	Assert(pg_atomic_read_u32(&lock->state) & LW_EXCLUSIVE);
 
 	/*
 	 * See if there are any LW_WAIT_UNTIL_FREE waiters that need to be woken
@@ -1794,24 +1841,44 @@ LWLockRelease(LWLock *lock)
 	 * Release my hold on lock, after that it can immediately be acquired by
 	 * others, even if we still have to wakeup other waiters.
 	 */
-	if (mode == LW_EXCLUSIVE)
-		oldstate = pg_atomic_sub_fetch_u32(&lock->state, LW_VAL_EXCLUSIVE);
+	if ((mode & LW_LOCK_MODE_MASK) == LW_EXCLUSIVE)
+	{
+		/*
+		 * Fast path: release the lock without looping if
+		 *  - no other holders
+		 *  - wait list not locked
+		 *  - no waiters
+		 *  - no wake in progress
+		 */
+		uint32		clear = (mode & LW_LOCK_ROOM_MASK) | LW_EXCLUSIVE;
+		oldstate = mode | LW_EXCLUSIVE;
+		while (!pg_atomic_compare_exchange_u32(&lock->state, &oldstate,
+												 oldstate & ~clear))
+		{
+			clear = mode & LW_LOCK_ROOM_MASK;
+			/*
+			 * Release the exclusive lock if there are no remaining
+			 * locked rooms.
+			 */
+			if ((oldstate & ((~mode & LW_LOCK_ROOM_MASK) | LW_FLAG_WAKE_IN_PROGRESS)) == 0)
+				clear |= LW_EXCLUSIVE;
+		}
+	}
 	else
-		oldstate = pg_atomic_sub_fetch_u32(&lock->state, LW_VAL_SHARED);
-
-	/* nobody else can have that kind of lock */
-	Assert(!(oldstate & LW_VAL_EXCLUSIVE));
+		oldstate = pg_atomic_sub_fetch_u32(&lock->state, LW_SHARED);
 
 	if (TRACE_POSTGRESQL_LWLOCK_RELEASE_ENABLED())
 		TRACE_POSTGRESQL_LWLOCK_RELEASE(T_NAME(lock));
 
 	/*
 	 * Check if we're still waiting for backends to get scheduled, if so,
-	 * don't wake them up again.
+	 * don't wake them up again.  Exclusive room release must wake even
+	 * when other rooms remain; LWLockWakeup filters by waiter rooms.
 	 */
 	if ((oldstate & LW_FLAG_HAS_WAITERS) &&
 		!(oldstate & LW_FLAG_WAKE_IN_PROGRESS) &&
-		(oldstate & LW_LOCK_MASK) == 0)
+		((oldstate & LW_LOCK_MASK) == 0 ||
+		 (mode & LW_LOCK_MODE_MASK) == LW_EXCLUSIVE))
 		check_waiters = true;
 	else
 		check_waiters = false;
@@ -1932,7 +1999,8 @@ LWLockHeldByMeInMode(LWLock *lock, LWLockMode mode)
 
 	for (i = 0; i < num_held_lwlocks; i++)
 	{
-		if (held_lwlocks[i].lock == lock && held_lwlocks[i].mode == mode)
+		if (held_lwlocks[i].lock == lock &&
+			(held_lwlocks[i].mode & LW_LOCK_MODE_MASK) == (mode & LW_LOCK_MODE_MASK))
 			return true;
 	}
 	return false;
