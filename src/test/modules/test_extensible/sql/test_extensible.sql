@@ -33,6 +33,12 @@ SELECT test_ext_node_equal(test_ext_node_make('1234'::oid, 2),
 
 -- correct node type, missing field
 SELECT test_ext_node_get_relid('{EXTENSIBLENODE :extnodename TestExtNode}');
+-- other node types, rejected before reaching their core read routines
+SELECT test_ext_node_get_relid('{QUERY}');
+-- extensible node of another kind
+SELECT test_ext_node_get_relid('{EXTENSIBLENODE :extnodename NoSuchExtNode}');
+-- not a node string at all
+SELECT test_ext_node_get_relid('42');
 
 -- CustomScan tests
 CREATE TABLE test_extensible_tbl (id integer, val text);

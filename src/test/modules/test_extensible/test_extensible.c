@@ -99,21 +99,43 @@ test_ext_node_out_cb(StringInfo str, const ExtensibleNode *node)
 }
 
 /*
- * Fetch the next token, erroring out instead of returning NULL.
+ * Fetch the next token of the string being read.
  *
- * Unlike anything in readfuncs.c, this callback is reachable with arbitrary
- * strings through SQL function calls, so we need this check.
+ * Unlike anything in readfuncs.c, this is reachable with arbitrary strings
+ * through SQL function calls, so the tokens need to be checked.  The two
+ * modes of this function fail differently:
+ *
+ * - With "expected" set to NULL, any token is accepted, but running out of
+ *   them is an error, reported here.  This is what the nodeRead callback
+ *   needs once the string is known to describe one of our nodes.
+ *
+ * - With a non-NULL "expected", a missing or different token is reported
+ *   to the caller as NULL, so that text_to_test_ext_node() can check a
+ *   sequence of tokens and issue a single error for the whole string.
  */
 static const char *
-test_ext_node_next_token(ReadNodeContext *ctx)
+test_ext_node_next_token(ReadNodeContext *ctx, const char *expected)
 {
 	int			length;
 	const char *token = pg_strtok(ctx, &length);
 
 	if (token == NULL)
+	{
+		if (expected != NULL)
+			return NULL;
+
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 				 errmsg("unexpected end of \"%s\"", TEST_EXT_NODE_NAME)));
+	}
+
+	if (expected != NULL)
+	{
+		if (length != (int) strlen(expected))
+			return NULL;
+		if (memcmp(token, expected, length) != 0)
+			return NULL;
+	}
 
 	return token;
 }
@@ -123,11 +145,11 @@ test_ext_node_read_cb(ReadNodeContext *ctx, ExtensibleNode *node)
 {
 	TestExtNode *tnode = (TestExtNode *) node;
 
-	(void) test_ext_node_next_token(ctx);	/* skip :relid */
-	tnode->relid = atooid(test_ext_node_next_token(ctx));
+	(void) test_ext_node_next_token(ctx, NULL); /* skip :relid */
+	tnode->relid = atooid(test_ext_node_next_token(ctx, NULL));
 
-	(void) test_ext_node_next_token(ctx);	/* skip :repeat_count */
-	tnode->repeat_count = atoi(test_ext_node_next_token(ctx));
+	(void) test_ext_node_next_token(ctx, NULL); /* skip :repeat_count */
+	tnode->repeat_count = atoi(test_ext_node_next_token(ctx, NULL));
 }
 
 static const ExtensibleNodeMethods test_ext_node_methods =
@@ -463,22 +485,36 @@ test_get_custom_scan_methods(PG_FUNCTION_ARGS)
 }
 
 /*
- * Decode a TestExtNode via stringToNode(), rejecting a string describing
- * some other kind of node instead of misinterpreting it as one of ours.
+ * Decode a TestExtNode via stringToNode().
+ *
+ * stringToNode() assumes its input to be valid, and the read routines of
+ * readfuncs.c it dispatches to do not check for missing tokens, so handing
+ * it a string naming any other node type could crash the backend.  Hence,
+ * look at the leading tokens first and refuse anything that would not end
+ * up in our own nodeRead callback, the only one hardened against arbitrary
+ * input.
  */
 static TestExtNode *
 text_to_test_ext_node(text *txt)
 {
-	Node	   *node = stringToNode(text_to_cstring(txt));
+	char	   *str = text_to_cstring(txt);
+	ReadNodeContext ctx = {.str = str};
+	TestExtNode *tnode;
 
-	if (node == NULL || !IsA(node, ExtensibleNode) ||
-		strcmp(((ExtensibleNode *) node)->extnodename, TEST_EXT_NODE_NAME) != 0)
+	if (test_ext_node_next_token(&ctx, "{") == NULL ||
+		test_ext_node_next_token(&ctx, "EXTENSIBLENODE") == NULL ||
+		test_ext_node_next_token(&ctx, ":extnodename") == NULL ||
+		test_ext_node_next_token(&ctx, TEST_EXT_NODE_NAME) == NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("argument is not a serialized \"%s\"",
 						TEST_EXT_NODE_NAME)));
 
-	return (TestExtNode *) node;
+	tnode = (TestExtNode *) stringToNode(str);
+	Assert(IsA(tnode, ExtensibleNode) &&
+		   strcmp(tnode->base.extnodename, TEST_EXT_NODE_NAME) == 0);
+
+	return tnode;
 }
 
 /*
