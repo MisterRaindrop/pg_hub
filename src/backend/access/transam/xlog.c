@@ -2459,9 +2459,9 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 				 */
 				start = pgstat_prepare_io_time(track_wal_io_timing);
 
-				pgstat_report_wait_start(WAIT_EVENT_WAL_WRITE);
+				pgstat_report_wait_start_timed(WAIT_EVENT_WAL_WRITE);
 				written = pg_pwrite(openLogFile, from, nleft, startoffset);
-				pgstat_report_wait_end();
+				pgstat_report_wait_end_timed();
 
 				if (written <= 0)
 				{
@@ -2909,9 +2909,9 @@ XLogFlush(XLogRecPtr record)
 		if (CommitDelay > 0 && enableFsync &&
 			MinimumActiveBackends(CommitSiblings))
 		{
-			pgstat_report_wait_start(WAIT_EVENT_COMMIT_DELAY);
+			pgstat_report_wait_start_timed(WAIT_EVENT_COMMIT_DELAY);
 			pg_usleep(CommitDelay);
-			pgstat_report_wait_end();
+			pgstat_report_wait_end_timed();
 
 			/*
 			 * Re-check how far we can now flush the WAL. It's generally not
@@ -3303,7 +3303,7 @@ XLogFileInitInternal(XLogSegNo logsegno, TimeLineID logtli,
 	/* Measure I/O timing when initializing segment */
 	io_start = pgstat_prepare_io_time(track_wal_io_timing);
 
-	pgstat_report_wait_start(WAIT_EVENT_WAL_INIT_WRITE);
+	pgstat_report_wait_start_timed(WAIT_EVENT_WAL_INIT_WRITE);
 	save_errno = 0;
 	if (wal_init_zero)
 	{
@@ -3336,7 +3336,7 @@ XLogFileInitInternal(XLogSegNo logsegno, TimeLineID logtli,
 			save_errno = errno ? errno : ENOSPC;
 		}
 	}
-	pgstat_report_wait_end();
+	pgstat_report_wait_end_timed();
 
 	if (save_errno)
 	{
@@ -3365,7 +3365,7 @@ XLogFileInitInternal(XLogSegNo logsegno, TimeLineID logtli,
 	/* Measure I/O timing when flushing segment */
 	io_start = pgstat_prepare_io_time(track_wal_io_timing);
 
-	pgstat_report_wait_start(WAIT_EVENT_WAL_INIT_SYNC);
+	pgstat_report_wait_start_timed(WAIT_EVENT_WAL_INIT_SYNC);
 	if (pg_fsync(fd) != 0)
 	{
 		save_errno = errno;
@@ -3375,7 +3375,7 @@ XLogFileInitInternal(XLogSegNo logsegno, TimeLineID logtli,
 				(errcode_for_file_access(),
 				 errmsg("could not fsync file \"%s\": %m", tmppath)));
 	}
-	pgstat_report_wait_end();
+	pgstat_report_wait_end_timed();
 
 	pgstat_count_io_op_time(IOOBJECT_WAL, IOCONTEXT_INIT,
 							IOOP_FSYNC, io_start, 1, 0);
@@ -3530,7 +3530,7 @@ XLogFileCopy(TimeLineID destTLI, XLogSegNo destsegno,
 
 			if (nread > sizeof(buffer))
 				nread = sizeof(buffer);
-			pgstat_report_wait_start(WAIT_EVENT_WAL_COPY_READ);
+			pgstat_report_wait_start_timed(WAIT_EVENT_WAL_COPY_READ);
 			r = read(srcfd, buffer.data, nread);
 			if (r != nread)
 			{
@@ -3545,10 +3545,10 @@ XLogFileCopy(TimeLineID destTLI, XLogSegNo destsegno,
 							 errmsg("could not read file \"%s\": read %zd of %zu",
 									path, r, nread)));
 			}
-			pgstat_report_wait_end();
+			pgstat_report_wait_end_timed();
 		}
 		errno = 0;
-		pgstat_report_wait_start(WAIT_EVENT_WAL_COPY_WRITE);
+		pgstat_report_wait_start_timed(WAIT_EVENT_WAL_COPY_WRITE);
 		if (write(fd, buffer.data, sizeof(buffer)) != sizeof(buffer))
 		{
 			int			save_errno = errno;
@@ -3564,15 +3564,15 @@ XLogFileCopy(TimeLineID destTLI, XLogSegNo destsegno,
 					(errcode_for_file_access(),
 					 errmsg("could not write to file \"%s\": %m", tmppath)));
 		}
-		pgstat_report_wait_end();
+		pgstat_report_wait_end_timed();
 	}
 
-	pgstat_report_wait_start(WAIT_EVENT_WAL_COPY_SYNC);
+	pgstat_report_wait_start_timed(WAIT_EVENT_WAL_COPY_SYNC);
 	if (pg_fsync(fd) != 0)
 		ereport(data_sync_elevel(ERROR),
 				(errcode_for_file_access(),
 				 errmsg("could not fsync file \"%s\": %m", tmppath)));
-	pgstat_report_wait_end();
+	pgstat_report_wait_end_timed();
 
 	if (CloseTransientFile(fd) != 0)
 		ereport(ERROR,
@@ -4382,7 +4382,7 @@ WriteControlFile(void)
 						XLOG_CONTROL_FILE)));
 
 	errno = 0;
-	pgstat_report_wait_start(WAIT_EVENT_CONTROL_FILE_WRITE);
+	pgstat_report_wait_start_timed(WAIT_EVENT_CONTROL_FILE_WRITE);
 	if (write(fd, buffer, PG_CONTROL_FILE_SIZE) != PG_CONTROL_FILE_SIZE)
 	{
 		/* if write didn't set errno, assume problem is no disk space */
@@ -4393,15 +4393,15 @@ WriteControlFile(void)
 				 errmsg("could not write to file \"%s\": %m",
 						XLOG_CONTROL_FILE)));
 	}
-	pgstat_report_wait_end();
+	pgstat_report_wait_end_timed();
 
-	pgstat_report_wait_start(WAIT_EVENT_CONTROL_FILE_SYNC);
+	pgstat_report_wait_start_timed(WAIT_EVENT_CONTROL_FILE_SYNC);
 	if (pg_fsync(fd) != 0)
 		ereport(PANIC,
 				(errcode_for_file_access(),
 				 errmsg("could not fsync file \"%s\": %m",
 						XLOG_CONTROL_FILE)));
-	pgstat_report_wait_end();
+	pgstat_report_wait_end_timed();
 
 	if (close(fd) != 0)
 		ereport(PANIC,
@@ -4429,7 +4429,7 @@ ReadControlFile(void)
 				 errmsg("could not open file \"%s\": %m",
 						XLOG_CONTROL_FILE)));
 
-	pgstat_report_wait_start(WAIT_EVENT_CONTROL_FILE_READ);
+	pgstat_report_wait_start_timed(WAIT_EVENT_CONTROL_FILE_READ);
 	r = read(fd, ControlFile, sizeof(ControlFileData));
 	if (r != sizeof(ControlFileData))
 	{
@@ -4444,7 +4444,7 @@ ReadControlFile(void)
 					 errmsg("could not read file \"%s\": read %zd of %zu",
 							XLOG_CONTROL_FILE, r, sizeof(ControlFileData))));
 	}
-	pgstat_report_wait_end();
+	pgstat_report_wait_end_timed();
 
 	close(fd);
 
@@ -5594,7 +5594,7 @@ BootStrapXLOG(uint32 data_checksum_version)
 
 	/* Write the first page with the initial record */
 	errno = 0;
-	pgstat_report_wait_start(WAIT_EVENT_WAL_BOOTSTRAP_WRITE);
+	pgstat_report_wait_start_timed(WAIT_EVENT_WAL_BOOTSTRAP_WRITE);
 	if (write(openLogFile, &buffer, XLOG_BLCKSZ) != XLOG_BLCKSZ)
 	{
 		/* if write didn't set errno, assume problem is no disk space */
@@ -5604,14 +5604,14 @@ BootStrapXLOG(uint32 data_checksum_version)
 				(errcode_for_file_access(),
 				 errmsg("could not write bootstrap write-ahead log file: %m")));
 	}
-	pgstat_report_wait_end();
+	pgstat_report_wait_end_timed();
 
-	pgstat_report_wait_start(WAIT_EVENT_WAL_BOOTSTRAP_SYNC);
+	pgstat_report_wait_start_timed(WAIT_EVENT_WAL_BOOTSTRAP_SYNC);
 	if (pg_fsync(openLogFile) != 0)
 		ereport(PANIC,
 				(errcode_for_file_access(),
 				 errmsg("could not fsync bootstrap write-ahead log file: %m")));
-	pgstat_report_wait_end();
+	pgstat_report_wait_end_timed();
 
 	if (close(openLogFile) != 0)
 		ereport(PANIC,
@@ -7734,9 +7734,9 @@ CreateCheckPoint(int flags)
 			 */
 			AbsorbSyncRequests();
 
-			pgstat_report_wait_start(WAIT_EVENT_CHECKPOINT_DELAY_START);
+			pgstat_report_wait_start_timed(WAIT_EVENT_CHECKPOINT_DELAY_START);
 			pg_usleep(10000L);	/* wait for 10 msec */
-			pgstat_report_wait_end();
+			pgstat_report_wait_end_timed();
 		} while (HaveVirtualXIDsDelayingChkpt(vxids, nvxids,
 											  DELAY_CHKPT_START));
 	}
@@ -7751,9 +7751,9 @@ CreateCheckPoint(int flags)
 		{
 			AbsorbSyncRequests();
 
-			pgstat_report_wait_start(WAIT_EVENT_CHECKPOINT_DELAY_COMPLETE);
+			pgstat_report_wait_start_timed(WAIT_EVENT_CHECKPOINT_DELAY_COMPLETE);
 			pg_usleep(10000L);	/* wait for 10 msec */
-			pgstat_report_wait_end();
+			pgstat_report_wait_end_timed();
 		} while (HaveVirtualXIDsDelayingChkpt(vxids, nvxids,
 											  DELAY_CHKPT_COMPLETE));
 	}
@@ -9395,7 +9395,7 @@ assign_wal_sync_method(int new_wal_sync_method, void *extra)
 		 */
 		if (openLogFile >= 0)
 		{
-			pgstat_report_wait_start(WAIT_EVENT_WAL_SYNC_METHOD_ASSIGN);
+			pgstat_report_wait_start_timed(WAIT_EVENT_WAL_SYNC_METHOD_ASSIGN);
 			if (pg_fsync(openLogFile) != 0)
 			{
 				char		xlogfname[MAXFNAMELEN];
@@ -9410,7 +9410,7 @@ assign_wal_sync_method(int new_wal_sync_method, void *extra)
 						 errmsg("could not fsync file \"%s\": %m", xlogfname)));
 			}
 
-			pgstat_report_wait_end();
+			pgstat_report_wait_end_timed();
 			if (get_sync_bit(wal_sync_method) != get_sync_bit(new_wal_sync_method))
 				XLogFileClose();
 		}
@@ -9446,7 +9446,7 @@ issue_xlog_fsync(int fd, XLogSegNo segno, TimeLineID tli)
 	 */
 	start = pgstat_prepare_io_time(track_wal_io_timing);
 
-	pgstat_report_wait_start(WAIT_EVENT_WAL_SYNC);
+	pgstat_report_wait_start_timed(WAIT_EVENT_WAL_SYNC);
 	switch (wal_sync_method)
 	{
 		case WAL_SYNC_METHOD_FSYNC:
@@ -9488,7 +9488,7 @@ issue_xlog_fsync(int fd, XLogSegNo segno, TimeLineID tli)
 				 errmsg(msg, xlogfname)));
 	}
 
-	pgstat_report_wait_end();
+	pgstat_report_wait_end_timed();
 
 	pgstat_count_io_op_time(IOOBJECT_WAL, IOCONTEXT_NORMAL, IOOP_FSYNC,
 							start, 1, 0);
