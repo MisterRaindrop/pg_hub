@@ -519,16 +519,14 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
 													  PATH_REQ_OUTER(old_path));
 						if (keyscmp == PATHKEYS_BETTER1)
 						{
-							if ((outercmp == BMS_EQUAL ||
-								 outercmp == BMS_SUBSET1) &&
+							if (outercmp == BMS_EQUAL &&
 								new_path->rows <= old_path->rows &&
 								new_path->parallel_safe >= old_path->parallel_safe)
 								remove_old = true;	/* new dominates old */
 						}
 						else if (keyscmp == PATHKEYS_BETTER2)
 						{
-							if ((outercmp == BMS_EQUAL ||
-								 outercmp == BMS_SUBSET2) &&
+							if (outercmp == BMS_EQUAL &&
 								new_path->rows >= old_path->rows &&
 								new_path->parallel_safe <= old_path->parallel_safe)
 								accept_new = false; /* old dominates new */
@@ -570,14 +568,6 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
 									accept_new = false; /* old equals or
 														 * dominates new */
 							}
-							else if (outercmp == BMS_SUBSET1 &&
-									 new_path->rows <= old_path->rows &&
-									 new_path->parallel_safe >= old_path->parallel_safe)
-								remove_old = true;	/* new dominates old */
-							else if (outercmp == BMS_SUBSET2 &&
-									 new_path->rows >= old_path->rows &&
-									 new_path->parallel_safe <= old_path->parallel_safe)
-								accept_new = false; /* old dominates new */
 							/* else different parameterizations, keep both */
 						}
 						break;
@@ -586,8 +576,7 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
 						{
 							outercmp = bms_subset_compare(PATH_REQ_OUTER(new_path),
 														  PATH_REQ_OUTER(old_path));
-							if ((outercmp == BMS_EQUAL ||
-								 outercmp == BMS_SUBSET1) &&
+							if (outercmp == BMS_EQUAL &&
 								new_path->rows <= old_path->rows &&
 								new_path->parallel_safe >= old_path->parallel_safe)
 								remove_old = true;	/* new dominates old */
@@ -598,8 +587,7 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
 						{
 							outercmp = bms_subset_compare(PATH_REQ_OUTER(new_path),
 														  PATH_REQ_OUTER(old_path));
-							if ((outercmp == BMS_EQUAL ||
-								 outercmp == BMS_SUBSET2) &&
+							if (outercmp == BMS_EQUAL &&
 								new_path->rows >= old_path->rows &&
 								new_path->parallel_safe <= old_path->parallel_safe)
 								accept_new = false; /* old dominates new */
