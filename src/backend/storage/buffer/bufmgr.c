@@ -701,7 +701,7 @@ PrefetchSharedBuffer(SMgrRelation smgr_reln,
 	PrefetchBufferResult result = {InvalidBuffer, false};
 	BufferTag	newTag;			/* identity of requested block */
 	uint32		newHash;		/* hash value for newTag */
-	LWLock	   *newPartitionLock;	/* buffer partition lock for it */
+	/* LWLock	   *newPartitionLock; */ /* XXX: no lock used */
 	int			buf_id;
 
 	Assert(BlockNumberIsValid(blockNum));
@@ -712,12 +712,12 @@ PrefetchSharedBuffer(SMgrRelation smgr_reln,
 
 	/* determine its hash code and partition lock ID */
 	newHash = BufTableHashCode(&newTag);
-	newPartitionLock = BufMappingPartitionLock(newHash);
+	/* newPartitionLock = BufMappingPartitionLock(newHash); */
 
 	/* see if the block is in the buffer pool already */
-	LWLockAcquire(newPartitionLock, LW_SHARED);
+	/* LWLockAcquire(newPartitionLock, LW_SHARED); */ /* XXX: Lookup doesn't require a lock */
 	buf_id = BufTableLookup(&newTag, newHash);
-	LWLockRelease(newPartitionLock);
+	/* LWLockRelease(newPartitionLock); */ /* XXX: Lock not acquired */
 
 	/* If not in buffers, initiate prefetch */
 	if (buf_id < 0)
@@ -2201,7 +2201,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 {
 	BufferTag	newTag;			/* identity of requested block */
 	uint32		newHash;		/* hash value for newTag */
-	LWLock	   *newPartitionLock;	/* buffer partition lock for it */
+	/* LWLock	   *newPartitionLock; */ /* XXX: no lock used */
 	int			existing_buf_id;
 	Buffer		victim_buffer;
 	BufferDesc *victim_buf_hdr;
@@ -2217,10 +2217,10 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 	/* determine its hash code and partition lock ID */
 	newHash = BufTableHashCode(&newTag);
-	newPartitionLock = BufMappingPartitionLock(newHash);
+	/* newPartitionLock = BufMappingPartitionLock(newHash); */
 
 	/* see if the block is in the buffer pool already */
-	LWLockAcquire(newPartitionLock, LW_SHARED);
+	/* LWLockAcquire(newPartitionLock, LW_SHARED); */ /* XXX: Lookup doesn't require a lock */
 	existing_buf_id = BufTableLookup(&newTag, newHash);
 	if (existing_buf_id >= 0)
 	{
@@ -2237,7 +2237,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		valid = PinBuffer(buf, strategy, false);
 
 		/* Can release the mapping lock as soon as we've pinned it */
-		LWLockRelease(newPartitionLock);
+		/* LWLockRelease(newPartitionLock); */ /* XXX: Lock not acquired */
 
 		*foundPtr = true;
 
@@ -2258,7 +2258,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	 * Didn't find it in the buffer pool.  We'll have to initialize a new
 	 * buffer.  Remember to unlock the mapping lock while doing the work.
 	 */
-	LWLockRelease(newPartitionLock);
+	/* LWLockRelease(newPartitionLock); */ /* XXX: Lock not acquired */
 
 	/*
 	 * Acquire a victim buffer. Somebody else might try to do the same, we
@@ -2273,7 +2273,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	 * somebody else inserted another buffer for the tag, we'll release the
 	 * victim buffer we acquired and use the already inserted one.
 	 */
-	LWLockAcquire(newPartitionLock, LW_EXCLUSIVE);
+	/* LWLockAcquire(newPartitionLock, LW_EXCLUSIVE); */ /* XXX: Insert doesn't require a lock */
 	existing_buf_id = BufTableInsert(&newTag, newHash, victim_buf_hdr->buf_id);
 	if (existing_buf_id >= 0)
 	{
@@ -2299,7 +2299,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		valid = PinBuffer(existing_buf_hdr, strategy, false);
 
 		/* Can release the mapping lock as soon as we've pinned it */
-		LWLockRelease(newPartitionLock);
+		/* LWLockRelease(newPartitionLock); */ /* XXX: Lock not acquired */
 
 		*foundPtr = true;
 
@@ -2340,7 +2340,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	UnlockBufHdrExt(victim_buf_hdr, victim_buf_state,
 					set_bits, 0, 0);
 
-	LWLockRelease(newPartitionLock);
+	/* LWLockRelease(newPartitionLock); */ /* XXX: Lock not acquired */
 
 	/*
 	 * Buffer contents are currently invalid.
@@ -2915,7 +2915,7 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 		BufferDesc *victim_buf_hdr = GetBufferDescriptor(victim_buf - 1);
 		BufferTag	tag;
 		uint32		hash;
-		LWLock	   *partition_lock;
+		/* LWLock	   *partition_lock; */ /* XXX: no lock used */
 		int			existing_id;
 
 		/* in case we need to pin an existing buffer below */
@@ -2925,9 +2925,9 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 		InitBufferTag(&tag, &BMR_GET_SMGR(bmr)->smgr_rlocator.locator, fork,
 					  first_block + i);
 		hash = BufTableHashCode(&tag);
-		partition_lock = BufMappingPartitionLock(hash);
+		/* partition_lock = BufMappingPartitionLock(hash); */
 
-		LWLockAcquire(partition_lock, LW_EXCLUSIVE);
+		/* LWLockAcquire(partition_lock, LW_EXCLUSIVE); */ /* XXX: Insert doesn't require a lock */
 
 		existing_id = BufTableInsert(&tag, hash, victim_buf_hdr->buf_id);
 
@@ -2955,7 +2955,7 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 			 */
 			valid = PinBuffer(existing_hdr, strategy, false);
 
-			LWLockRelease(partition_lock);
+			/* LWLockRelease(partition_lock); */ /* XXX: Lock not acquired */
 			UnpinBuffer(victim_buf_hdr);
 
 			buffers[i] = BufferDescriptorGetBuffer(existing_hdr);
@@ -3010,7 +3010,7 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 							set_bits, 0,
 							0);
 
-			LWLockRelease(partition_lock);
+			/* LWLockRelease(partition_lock); */ /* XXX: Lock not acquired */
 
 			/* XXX: could combine the locked operations in it with the above */
 			StartSharedBufferIO(victim_buf_hdr, true, true, NULL);
@@ -5085,7 +5085,7 @@ FindAndDropRelationBuffers(RelFileLocator rlocator, ForkNumber forkNum,
 	{
 		uint32		bufHash;	/* hash value for tag */
 		BufferTag	bufTag;		/* identity of requested block */
-		LWLock	   *bufPartitionLock;	/* buffer partition lock for it */
+		/* LWLock	   *bufPartitionLock; */ /* XXX: no lock used */
 		int			buf_id;
 		BufferDesc *bufHdr;
 
@@ -5094,12 +5094,12 @@ FindAndDropRelationBuffers(RelFileLocator rlocator, ForkNumber forkNum,
 
 		/* determine its hash code and partition lock ID */
 		bufHash = BufTableHashCode(&bufTag);
-		bufPartitionLock = BufMappingPartitionLock(bufHash);
+		/* bufPartitionLock = BufMappingPartitionLock(bufHash); */
 
 		/* Check that it is in the buffer pool. If not, do nothing. */
-		LWLockAcquire(bufPartitionLock, LW_SHARED);
+		/* LWLockAcquire(bufPartitionLock, LW_SHARED); */ /* XXX: Lookup doesn't require a lock */
 		buf_id = BufTableLookup(&bufTag, bufHash);
-		LWLockRelease(bufPartitionLock);
+		/* LWLockRelease(bufPartitionLock); */ /* XXX: Lock not acquired */
 
 		if (buf_id < 0)
 			continue;
