@@ -828,7 +828,7 @@ table public.table_dropped_index_with_pk: INSERT: a[integer]:2 b[integer]:2 c[in
 table public.table_dropped_index_with_pk: INSERT: a[integer]:3 b[integer]:3 c[integer]:3
 COMMIT
 BEGIN
-table public.table_dropped_index_with_pk: UPDATE: a[integer]:4 b[integer]:1 c[integer]:1
+table public.table_dropped_index_with_pk: UPDATE: old-key: a[integer]:1 new-tuple: a[integer]:4 b[integer]:1 c[integer]:1
 COMMIT
 BEGIN
 table public.table_dropped_index_with_pk: UPDATE: a[integer]:2 b[integer]:5 c[integer]:2
@@ -837,10 +837,10 @@ BEGIN
 table public.table_dropped_index_with_pk: UPDATE: a[integer]:3 b[integer]:6 c[integer]:7
 COMMIT
 BEGIN
-table public.table_dropped_index_with_pk: DELETE: (no-tuple-data)
+table public.table_dropped_index_with_pk: DELETE: a[integer]:4
 COMMIT
 BEGIN
-table public.table_dropped_index_with_pk: DELETE: (no-tuple-data)
+table public.table_dropped_index_with_pk: DELETE: a[integer]:3
 COMMIT
 BEGIN
 table public.table_dropped_index_no_pk: INSERT: a[integer]:1 b[integer]:1 c[integer]:1

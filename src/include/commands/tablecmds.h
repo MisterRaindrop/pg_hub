@@ -45,6 +45,10 @@ extern void AlterTableInternal(Oid relid, List *cmds, bool recurse);
 
 extern Oid	AlterTableMoveAll(AlterTableMoveAllStmt *stmt);
 
+/* XXX not for commit */
+extern void relation_mark_replica_identity(Relation rel, char ri_type, Oid indexOid,
+										   bool is_internal);
+
 extern ObjectAddress AlterTableNamespace(AlterObjectSchemaStmt *stmt,
 										 Oid *oldschema);
 

@@ -2353,6 +2353,18 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 	}
 
 	/*
+	 * If this index is the replica identity of its table, mark the table as
+	 * having default replica identity.
+	 */
+	if (userHeapRelation->rd_rel->relreplident == REPLICA_IDENTITY_INDEX &&
+		RelationGetReplicaIndex(userHeapRelation) == indexId)
+	{
+		relation_mark_replica_identity(userHeapRelation, REPLICA_IDENTITY_DEFAULT,
+									   InvalidOid, true);
+		CommandCounterIncrement();
+	}
+
+	/*
 	 * Schedule physical removal of the files (if any)
 	 */
 	if (RELKIND_HAS_STORAGE(userIndexRelation->rd_rel->relkind))
