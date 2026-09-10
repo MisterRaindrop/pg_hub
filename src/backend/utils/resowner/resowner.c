@@ -118,13 +118,11 @@ struct ResourceOwnerData
 
 	/*
 	 * When ResourceOwnerRelease is called, we sort the 'hash' and 'arr' by
-	 * the release priority.  After that, no new resources can be remembered
-	 * or forgotten in retail.  We have separate flags because
-	 * ResourceOwnerReleaseAllOfKind() temporarily sets 'releasing' without
-	 * sorting the arrays.
+	 * the release priority, and set 'releasing'.  After that, no new
+	 * resources can be remembered or forgotten in retail, and 'hash'/'arr'
+	 * are known to be sorted.
 	 */
 	bool		releasing;
-	bool		sorted;			/* are 'hash' and 'arr' sorted by priority? */
 
 	/*
 	 * Number of items in the locks cache, array, and hash table respectively.
@@ -354,7 +352,6 @@ ResourceOwnerReleaseAll(ResourceOwner owner, ResourceReleasePhase phase,
 	 * either in the array or the hash.
 	 */
 	Assert(owner->releasing);
-	Assert(owner->sorted);
 	if (owner->nhash == 0)
 	{
 		items = owner->arr;
@@ -374,6 +371,11 @@ ResourceOwnerReleaseAll(ResourceOwner owner, ResourceReleasePhase phase,
 	 * starting from the end, until we hit the end of the phase that we are
 	 * releasing now.  We will continue from there when called again for the
 	 * next phase.
+	 *
+	 * RESOURCE_RELEASE_AT_ONCE means the caller wants everything the owner
+	 * holds released right now, regardless of each resource's own
+	 * release_phase, so we don't check phases or break out early in that
+	 * case.
 	 */
 	while (nitems > 0)
 	{
@@ -381,9 +383,12 @@ ResourceOwnerReleaseAll(ResourceOwner owner, ResourceReleasePhase phase,
 		Datum		value = items[idx].item;
 		const ResourceOwnerDesc *kind = items[idx].kind;
 
-		if (kind->release_phase > phase)
-			break;
-		Assert(kind->release_phase == phase);
+		if (phase != RESOURCE_RELEASE_AT_ONCE)
+		{
+			if (kind->release_phase > phase)
+				break;
+			Assert(kind->release_phase == phase);
+		}
 
 		if (printLeakWarnings)
 		{
@@ -541,7 +546,6 @@ ResourceOwnerRemember(ResourceOwner owner, Datum value, const ResourceOwnerDesc 
 	 * releasing.  We already checked this in ResourceOwnerEnlarge.
 	 */
 	Assert(!owner->releasing);
-	Assert(!owner->sorted);
 
 	if (owner->narr >= RESOWNER_ARRAY_SIZE)
 	{
@@ -577,7 +581,6 @@ ResourceOwnerForget(ResourceOwner owner, Datum value, const ResourceOwnerDesc *k
 	 */
 	if (owner->releasing)
 		elog(ERROR, "ResourceOwnerForget called for %s after release started", kind->name);
-	Assert(!owner->sorted);
 
 	/* Search through all items in the array first. */
 	for (int i = owner->narr - 1; i >= 0; i--)
@@ -706,9 +709,10 @@ ResourceOwnerReleaseInternal(ResourceOwner owner,
 	 */
 	if (!owner->releasing)
 	{
-		Assert(phase == RESOURCE_RELEASE_BEFORE_LOCKS);
-		Assert(!owner->sorted);
+		Assert(phase == RESOURCE_RELEASE_BEFORE_LOCKS ||
+			   phase == RESOURCE_RELEASE_AT_ONCE);
 		owner->releasing = true;
+		ResourceOwnerSort(owner);
 	}
 	else
 	{
@@ -718,11 +722,6 @@ ResourceOwnerReleaseInternal(ResourceOwner owner,
 		 * between the release phases, we might get called again for the same
 		 * ResourceOwner from AbortTransaction.
 		 */
-	}
-	if (!owner->sorted)
-	{
-		ResourceOwnerSort(owner);
-		owner->sorted = true;
 	}
 
 	/*
@@ -805,6 +804,19 @@ ResourceOwnerReleaseInternal(ResourceOwner owner,
 		 */
 		ResourceOwnerReleaseAll(owner, phase, isCommit);
 	}
+	else if (phase == RESOURCE_RELEASE_AT_ONCE)
+	{
+		/*
+		 * Release everything the owner holds right away, without regard to
+		 * each resource's own release_phase.  The owner is expected to hold
+		 * only resource kinds it's fine to release outside the normal
+		 * phase-locked sequence (e.g. no locks), and there's
+		 * intentionally no leak warning: whatever is remembered here is
+		 * exactly what this call means to release, not something left
+		 * behind by mistake.
+		 */
+		ResourceOwnerReleaseAll(owner, phase, false);
+	}
 
 	/* Let add-on modules get a chance too */
 	for (item = ResourceRelease_callbacks; item; item = next)
@@ -815,57 +827,6 @@ ResourceOwnerReleaseInternal(ResourceOwner owner,
 	}
 
 	CurrentResourceOwner = save;
-}
-
-/*
- * ResourceOwnerReleaseAllOfKind
- *		Release all resources of a certain type held by this owner.
- */
-void
-ResourceOwnerReleaseAllOfKind(ResourceOwner owner, const ResourceOwnerDesc *kind)
-{
-	/* Mustn't call this after we have already started releasing resources. */
-	if (owner->releasing)
-		elog(ERROR, "ResourceOwnerForget called for %s after release started", kind->name);
-	Assert(!owner->sorted);
-
-	/*
-	 * Temporarily set 'releasing', to prevent calls to ResourceOwnerRemember
-	 * while we're scanning the owner.  Enlarging the hash would cause us to
-	 * lose track of the point we're scanning.
-	 */
-	owner->releasing = true;
-
-	/* Array first */
-	for (int i = 0; i < owner->narr; i++)
-	{
-		if (owner->arr[i].kind == kind)
-		{
-			Datum		value = owner->arr[i].item;
-
-			owner->arr[i] = owner->arr[owner->narr - 1];
-			owner->narr--;
-			i--;
-
-			kind->ReleaseResource(value);
-		}
-	}
-
-	/* Then hash */
-	for (uint32 i = 0; i < owner->capacity; i++)
-	{
-		if (owner->hash[i].kind == kind)
-		{
-			Datum		value = owner->hash[i].item;
-
-			owner->hash[i].item = (Datum) 0;
-			owner->hash[i].kind = NULL;
-			owner->nhash--;
-
-			kind->ReleaseResource(value);
-		}
-	}
-	owner->releasing = false;
 }
 
 /*
@@ -1040,7 +1001,6 @@ ReleaseAuxProcessResources(bool isCommit)
 						 isCommit, true);
 	/* allow it to be reused */
 	AuxProcessResourceOwner->releasing = false;
-	AuxProcessResourceOwner->sorted = false;
 }
 
 /*

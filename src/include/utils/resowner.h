@@ -48,12 +48,22 @@ extern PGDLLIMPORT ResourceOwner AuxProcessResourceOwner;
  * resource types are given below, extensions may use any priority relative to
  * those or RELEASE_PRIO_FIRST/LAST.  RELEASE_PRIO_FIRST is a fine choice if
  * your resource doesn't depend on any other resources.
+ *
+ * RESOURCE_RELEASE_AT_ONCE is different: it doesn't participate in the
+ * phased BEFORE_LOCKS/LOCKS/AFTER_LOCKS sequence at all.  Example usage: for
+ * resource owners that are known in advance to hold only a single resource
+ * kind (so release ordering across kinds is moot) and that live outside the
+ * normal phase-locked release sequence, such as the detached ResourceOwners
+ * plpgsql uses to track plan-cache references across internal transactions.
+ * A single ResourceOwnerRelease() call with this phase releases everything
+ * the owner holds immediately, without waiting for further phase calls.
  */
 typedef enum
 {
 	RESOURCE_RELEASE_BEFORE_LOCKS = 1,
 	RESOURCE_RELEASE_LOCKS,
 	RESOURCE_RELEASE_AFTER_LOCKS,
+	RESOURCE_RELEASE_AT_ONCE,
 } ResourceReleasePhase;
 
 typedef uint32 ResourceReleasePriority;
@@ -101,9 +111,9 @@ typedef struct ResourceOwnerDesc
 	 *
 	 * This is called for each resource in the resource owner, in the order
 	 * specified by 'release_phase' and 'release_priority' when the whole
-	 * resource owner is been released or when ResourceOwnerReleaseAllOfKind()
-	 * is called.  The resource is implicitly removed from the owner, the
-	 * callback function doesn't need to call ResourceOwnerForget.
+	 * resource owner is been released.  The resource is implicitly removed
+	 * from the owner, the callback function doesn't need to call
+	 * ResourceOwnerForget.
 	 */
 	void		(*ReleaseResource) (Datum res);
 
@@ -148,8 +158,6 @@ extern void ResourceOwnerNewParent(ResourceOwner owner,
 extern void ResourceOwnerEnlarge(ResourceOwner owner);
 extern void ResourceOwnerRemember(ResourceOwner owner, Datum value, const ResourceOwnerDesc *kind);
 extern void ResourceOwnerForget(ResourceOwner owner, Datum value, const ResourceOwnerDesc *kind);
-
-extern void ResourceOwnerReleaseAllOfKind(ResourceOwner owner, const ResourceOwnerDesc *kind);
 
 extern void RegisterResourceReleaseCallback(ResourceReleaseCallback callback,
 											void *arg);

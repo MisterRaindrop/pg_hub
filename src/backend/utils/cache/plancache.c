@@ -2427,15 +2427,6 @@ ResetPlanCache(void)
 	}
 }
 
-/*
- * Release all CachedPlans remembered by 'owner'
- */
-void
-ReleaseAllPlanCacheRefsInOwner(ResourceOwner owner)
-{
-	ResourceOwnerReleaseAllOfKind(owner, &planref_resowner_desc);
-}
-
 /* ResourceOwner callbacks */
 
 static void
