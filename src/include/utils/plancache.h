@@ -200,8 +200,6 @@ typedef struct CachedExpression
 extern void InitPlanCache(void);
 extern void ResetPlanCache(void);
 
-extern void ReleaseAllPlanCacheRefsInOwner(ResourceOwner owner);
-
 extern CachedPlanSource *CreateCachedPlan(const RawStmt *raw_parse_tree,
 										  const char *query_string,
 										  CommandTag commandTag);

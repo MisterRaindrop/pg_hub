@@ -8838,7 +8838,7 @@ plpgsql_xact_cb(XactEvent event, void *arg)
 			FreeExecutorState(shared_simple_eval_estate);
 		shared_simple_eval_estate = NULL;
 		if (shared_simple_eval_resowner)
-			ReleaseAllPlanCacheRefsInOwner(shared_simple_eval_resowner);
+			ResourceOwnerRelease(shared_simple_eval_resowner, RESOURCE_RELEASE_AT_ONCE, false, true);
 		shared_simple_eval_resowner = NULL;
 	}
 	else if (event == XACT_EVENT_ABORT ||
