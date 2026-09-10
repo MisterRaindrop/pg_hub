@@ -19076,7 +19076,7 @@ ATExecDropOf(Relation rel, LOCKMODE lockmode)
  * Caller had better hold an exclusive lock on the relation, as the results
  * of running two of these concurrently wouldn't be pretty.
  */
-static void
+void	/* XXX removal of static not for commit */
 relation_mark_replica_identity(Relation rel, char ri_type, Oid indexOid,
 							   bool is_internal)
 {
