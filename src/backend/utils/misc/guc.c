@@ -2770,9 +2770,12 @@ get_config_unit_name(int flags)
  * If okay and result is not NULL, return the value in *result.
  * If not okay and hintmsg is not NULL, *hintmsg is set to a suitable
  * HINT message, or NULL if no hint provided.
+ * If input_sign is not NULL, *input_sign receives the sign of the quantity as
+ * written; see guc.h.
  */
 bool
-parse_int(const char *value, int *result, int flags, const char **hintmsg)
+parse_int_with_sign(const char *value, int *result, int flags,
+					const char **hintmsg, int *input_sign)
 {
 	/*
 	 * We assume here that double is wide enough to represent any integer
@@ -2786,6 +2789,8 @@ parse_int(const char *value, int *result, int flags, const char **hintmsg)
 		*result = 0;
 	if (hintmsg)
 		*hintmsg = NULL;
+	if (input_sign)
+		*input_sign = 0;
 
 	/*
 	 * Try to parse as an integer (allowing octal or hex input).  If the
@@ -2809,6 +2814,10 @@ parse_int(const char *value, int *result, int flags, const char **hintmsg)
 	/* reject NaN (infinities will fail range check below) */
 	if (isnan(val))
 		return false;			/* treat same as syntax error; no HINT */
+
+	/* Record the sign before conversion or rounding can obscure it */
+	if (input_sign)
+		*input_sign = (val < 0) ? -1 : (val > 0) ? 1 : 0;
 
 	/* allow whitespace between number and unit */
 	while (isspace((unsigned char) *endptr))
@@ -2852,6 +2861,15 @@ parse_int(const char *value, int *result, int flags, const char **hintmsg)
 }
 
 /*
+ * Compatibility wrapper for callers that don't need the input sign.
+ */
+bool
+parse_int(const char *value, int *result, int flags, const char **hintmsg)
+{
+	return parse_int_with_sign(value, result, flags, hintmsg, NULL);
+}
+
+/*
  * Try to parse value as a floating point number in the usual format.
  * Optionally, the value can be followed by a unit name if "flags" indicates
  * a unit is allowed.
@@ -2860,9 +2878,12 @@ parse_int(const char *value, int *result, int flags, const char **hintmsg)
  * If okay and result is not NULL, return the value in *result.
  * If not okay and hintmsg is not NULL, *hintmsg is set to a suitable
  * HINT message, or NULL if no hint provided.
+ * If input_sign is not NULL, *input_sign receives the sign of the quantity as
+ * written; see guc.h.
  */
 bool
-parse_real(const char *value, double *result, int flags, const char **hintmsg)
+parse_real_with_sign(const char *value, double *result, int flags,
+					 const char **hintmsg, int *input_sign)
 {
 	double		val;
 	char	   *endptr;
@@ -2872,6 +2893,8 @@ parse_real(const char *value, double *result, int flags, const char **hintmsg)
 		*result = 0;
 	if (hintmsg)
 		*hintmsg = NULL;
+	if (input_sign)
+		*input_sign = 0;
 
 	errno = 0;
 	val = strtod(value, &endptr);
@@ -2882,6 +2905,10 @@ parse_real(const char *value, double *result, int flags, const char **hintmsg)
 	/* reject NaN (infinities will fail range checks later) */
 	if (isnan(val))
 		return false;			/* treat same as syntax error; no HINT */
+
+	/* Record the sign before conversion can obscure it */
+	if (input_sign)
+		*input_sign = (val < 0) ? -1 : (val > 0) ? 1 : 0;
 
 	/* allow whitespace between number and unit */
 	while (isspace((unsigned char) *endptr))
@@ -2912,6 +2939,15 @@ parse_real(const char *value, double *result, int flags, const char **hintmsg)
 	if (result)
 		*result = val;
 	return true;
+}
+
+/*
+ * Compatibility wrapper for callers that don't need the input sign.
+ */
+bool
+parse_real(const char *value, double *result, int flags, const char **hintmsg)
+{
+	return parse_real_with_sign(value, result, flags, hintmsg, NULL);
 }
 
 
@@ -3052,9 +3088,10 @@ parse_and_validate_value(const struct config_generic *record,
 			{
 				const struct config_int *conf = &record->_int;
 				const char *hintmsg;
+				int			input_sign;
 
-				if (!parse_int(value, &newval->intval,
-							   record->flags, &hintmsg))
+				if (!parse_int_with_sign(value, &newval->intval,
+										 record->flags, &hintmsg, &input_sign))
 				{
 					ereport(elevel,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -3084,6 +3121,20 @@ parse_and_validate_value(const struct config_generic *record,
 					return false;
 				}
 
+				/*
+				 * Rounding can bring a negative quantity up to zero, which
+				 * passes the check above.
+				 */
+				if (input_sign < 0 && conf->min >= 0)
+				{
+					ereport(elevel,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("invalid value for parameter \"%s\": \"%s\"",
+									record->name, value),
+							 errdetail("Value must not be negative.")));
+					return false;
+				}
+
 				if (!call_int_check_hook(record, &newval->intval, newextra,
 										 source, elevel))
 					return false;
@@ -3093,9 +3144,10 @@ parse_and_validate_value(const struct config_generic *record,
 			{
 				const struct config_real *conf = &record->_real;
 				const char *hintmsg;
+				int			input_sign;
 
-				if (!parse_real(value, &newval->realval,
-								record->flags, &hintmsg))
+				if (!parse_real_with_sign(value, &newval->realval,
+										  record->flags, &hintmsg, &input_sign))
 				{
 					ereport(elevel,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -3122,6 +3174,17 @@ parse_and_validate_value(const struct config_generic *record,
 									record->name,
 									conf->min, unitspace, unit,
 									conf->max, unitspace, unit)));
+					return false;
+				}
+
+				/* see the PGC_INT case */
+				if (input_sign < 0 && conf->min >= 0)
+				{
+					ereport(elevel,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("invalid value for parameter \"%s\": \"%s\"",
+									record->name, value),
+							 errdetail("Value must not be negative.")));
 					return false;
 				}
 

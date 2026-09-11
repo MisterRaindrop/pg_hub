@@ -542,6 +542,17 @@ ERROR:  BUFFER_USAGE_LIMIT option must be 0 or between 128 kB and 16777216 kB
 VACUUM (BUFFER_USAGE_LIMIT 10000000000) vac_option_tab;
 ERROR:  BUFFER_USAGE_LIMIT option must be 0 or between 128 kB and 16777216 kB
 HINT:  Value exceeds integer range.
+-- only a value written as zero means "no ring buffer limit"; a nonzero size
+-- that rounds to zero, or a negative one, must be rejected
+VACUUM (BUFFER_USAGE_LIMIT '512B') vac_option_tab;
+ERROR:  BUFFER_USAGE_LIMIT option must be 0 or between 128 kB and 16777216 kB
+VACUUM (BUFFER_USAGE_LIMIT '-512B') vac_option_tab;
+ERROR:  BUFFER_USAGE_LIMIT option must be 0 or between 128 kB and 16777216 kB
+VACUUM (BUFFER_USAGE_LIMIT '513B') vac_option_tab;
+ERROR:  BUFFER_USAGE_LIMIT option must be 0 or between 128 kB and 16777216 kB
+VACUUM (BUFFER_USAGE_LIMIT '127kB') vac_option_tab;
+ERROR:  BUFFER_USAGE_LIMIT option must be 0 or between 128 kB and 16777216 kB
+VACUUM (BUFFER_USAGE_LIMIT '128kB') vac_option_tab;
 -- incompatible with VACUUM FULL error
 VACUUM (BUFFER_USAGE_LIMIT '512 kB', FULL) vac_option_tab;
 ERROR:  BUFFER_USAGE_LIMIT cannot be specified for VACUUM FULL

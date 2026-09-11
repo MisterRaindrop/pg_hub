@@ -148,3 +148,15 @@ SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test_idx'::regclass;
 CREATE INDEX reloptions_test_idx3 ON reloptions_test (s);
 ALTER INDEX reloptions_test_idx3 SET (fillfactor=40);
 SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test_idx3'::regclass;
+
+-- Reloptions are parsed by the same code, so a negative value that rounds to
+-- zero must not pass a non-negative minimum either
+CREATE TABLE reloptions_test3 (i INT) WITH (parallel_workers = -1);
+CREATE TABLE reloptions_test3 (i INT) WITH (parallel_workers = -0.4);
+CREATE TABLE reloptions_test3 (i INT) WITH (parallel_workers = 0);
+SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test3'::regclass;
+ALTER TABLE reloptions_test3 SET (parallel_workers = 0.4);
+SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test3'::regclass;
+ALTER TABLE reloptions_test3 SET (parallel_workers = 0.6);
+SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test3'::regclass;
+DROP TABLE reloptions_test3;

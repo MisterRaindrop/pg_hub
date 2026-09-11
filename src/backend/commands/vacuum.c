@@ -211,14 +211,19 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 			const char *hintmsg;
 			int			result;
 			char	   *vac_buffer_size;
+			int			input_sign;
 
 			vac_buffer_size = defGetString(opt);
 
 			/*
 			 * Check that the specified value is valid and the size falls
-			 * within the hard upper and lower limits if it is not 0.
+			 * within the hard upper and lower limits if it is not 0.  Only a
+			 * value written as zero selects the unlimited behavior, so a
+			 * nonzero size that rounded to zero is rejected too.
 			 */
-			if (!parse_int(vac_buffer_size, &result, GUC_UNIT_KB, &hintmsg) ||
+			if (!parse_int_with_sign(vac_buffer_size, &result, GUC_UNIT_KB,
+									 &hintmsg, &input_sign) ||
+				(result == 0 && input_sign != 0) ||
 				(result != 0 &&
 				 (result < MIN_BAS_VAC_RING_SIZE_KB || result > MAX_BAS_VAC_RING_SIZE_KB)))
 			{

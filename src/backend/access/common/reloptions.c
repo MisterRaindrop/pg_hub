@@ -1806,15 +1806,23 @@ parse_one_reloption(relopt_value *option, char *text_str, int text_len,
 		case RELOPT_TYPE_INT:
 			{
 				relopt_int *optint = (relopt_int *) option->gen;
+				int			input_sign;
 
-				parsed = parse_int(value, &option->int_val, 0, NULL);
+				parsed = parse_int_with_sign(value, &option->int_val, 0, NULL,
+											 &input_sign);
 				if (validate && !parsed)
 					ereport(ERROR,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 							 errmsg("invalid value for integer option \"%s\": %s",
 									option->gen->name, value)));
+
+				/*
+				 * Rounding can bring a negative value up to zero, so also
+				 * reject a negative input when negatives are out of bounds.
+				 */
 				if (validate && (option->int_val < optint->min ||
-								 option->int_val > optint->max))
+								 option->int_val > optint->max ||
+								 (input_sign < 0 && optint->min >= 0)))
 					ereport(ERROR,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 							 errmsg("value %s out of bounds for option \"%s\"",

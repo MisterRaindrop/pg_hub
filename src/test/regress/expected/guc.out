@@ -992,3 +992,77 @@ SELECT name FROM tab_settings_flags
 (0 rows)
 
 DROP TABLE tab_settings_flags;
+-- Rounding must not hide the sign of the value.  A negative quantity that
+-- rounds to zero is still negative, so a parameter that excludes negative
+-- values must reject it.  Positive values that round to zero are unaffected.
+SET statement_timeout = '-1ms';
+ERROR:  -1 ms is outside the valid range for parameter "statement_timeout" (0 ms .. 2147483647 ms)
+SET statement_timeout = '-0.5ms';
+ERROR:  invalid value for parameter "statement_timeout": "-0.5ms"
+DETAIL:  Value must not be negative.
+SET statement_timeout = '-0.0005s';
+ERROR:  invalid value for parameter "statement_timeout": "-0.0005s"
+DETAIL:  Value must not be negative.
+SET statement_timeout = '0';
+SHOW statement_timeout;
+ statement_timeout 
+-------------------
+ 0
+(1 row)
+
+SET statement_timeout = '-0';
+SHOW statement_timeout;
+ statement_timeout 
+-------------------
+ 0
+(1 row)
+
+SET statement_timeout = '0.4ms';
+SHOW statement_timeout;
+ statement_timeout 
+-------------------
+ 0
+(1 row)
+
+RESET statement_timeout;
+-- negative values are still accepted where the minimum is negative
+SET log_min_duration_statement = '-0.4ms';
+SHOW log_min_duration_statement;
+ log_min_duration_statement 
+----------------------------
+ 0
+(1 row)
+
+RESET log_min_duration_statement;
+-- positive values still round up into an above-zero minimum
+SET deadlock_timeout = '0.6ms';
+SHOW deadlock_timeout;
+ deadlock_timeout 
+------------------
+ 1ms
+(1 row)
+
+RESET deadlock_timeout;
+-- values that round to something nonzero are unaffected
+SET work_mem = '1.1GB';
+SHOW work_mem;
+ work_mem 
+----------
+ 1126MB
+(1 row)
+
+RESET work_mem;
+-- likewise for a real-valued parameter
+SET vacuum_cost_delay = '-0.4ms';
+ERROR:  -0.4 ms is outside the valid range for parameter "vacuum_cost_delay" (0 ms .. 100 ms)
+SET vacuum_cost_delay = '-0.0004s';
+ERROR:  invalid value for parameter "vacuum_cost_delay": "-0.0004s"
+DETAIL:  Value must not be negative.
+SET vacuum_cost_delay = '0.4ms';
+SHOW vacuum_cost_delay;
+ vacuum_cost_delay 
+-------------------
+ 400us
+(1 row)
+
+RESET vacuum_cost_delay;

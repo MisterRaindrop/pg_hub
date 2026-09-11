@@ -439,10 +439,25 @@ extern void BeginReportingGUCOptions(void);
 extern void ReportChangedGUCOptions(void);
 extern void ParseLongOption(const char *string, char **name, char **value);
 extern const char *get_config_unit_name(int flags);
+
+/*
+ * parse_int() and parse_real() are lossy: unit conversion rounds to a multiple
+ * of the next smaller unit, and parse_int() then rounds to an integer.  Either
+ * step can turn a small non-zero quantity into zero, hiding from the caller
+ * both that the quantity was non-zero and which side of zero it came from.
+ * The _with_sign variants additionally report the sign of the quantity as
+ * written, taken before any conversion or rounding: -1, 0 or +1.  Note this is
+ * the sign of the quantity and not of the lexeme, so "-0" and "-0.0" report 0.
+ * As with result and hintmsg, input_sign may be NULL.
+ */
 extern bool parse_int(const char *value, int *result, int flags,
 					  const char **hintmsg);
+extern bool parse_int_with_sign(const char *value, int *result, int flags,
+								const char **hintmsg, int *input_sign);
 extern bool parse_real(const char *value, double *result, int flags,
 					   const char **hintmsg);
+extern bool parse_real_with_sign(const char *value, double *result, int flags,
+								 const char **hintmsg, int *input_sign);
 extern int	set_config_option(const char *name, const char *value,
 							  GucContext context, GucSource source,
 							  GucAction action, bool changeVal, int elevel,
