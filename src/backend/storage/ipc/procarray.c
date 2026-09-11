@@ -2473,7 +2473,8 @@ GetSnapshotData(Snapshot snapshot)
  * check that the source transaction is still running, and we'd better do
  * that atomically with installing the new xmin.
  *
- * Returns true if successful, false if source xact is no longer running.
+ * Returns true if successful, false if source xact is no longer running or
+ * recovery is waiting for it.
  */
 bool
 ProcArrayInstallImportedXmin(TransactionId xmin,
@@ -2535,6 +2536,14 @@ ProcArrayInstallImportedXmin(TransactionId xmin,
 			continue;
 
 		/*
+		 * Recovery has included this transaction in a fixed wait list.  Do
+		 * not let an imported snapshot transfer its conflicting xmin to a
+		 * transaction that is absent from that list.
+		 */
+		if (pg_atomic_read_u32(&proc->recoveryConflictTracked) != 0)
+			break;
+
+		/*
 		 * We're good.  Install the new xmin.  As in GetSnapshotData, set
 		 * TransactionXmin too.  (Note that because snapmgr.c called
 		 * GetSnapshotData first, we'll be overwriting a valid xmin here, so
@@ -2561,6 +2570,10 @@ ProcArrayInstallImportedXmin(TransactionId xmin,
  * Note that this function also copies statusFlags from the source `proc` in
  * order to avoid the case where MyProc's xmin needs to be skipped for
  * computing xid horizon.
+ *
+ * Unlike independent SQL snapshot imports, this is used only by parallel
+ * workers.  A parallel worker cannot outlive the leader VXID that recovery
+ * tracks, so it need not check recoveryConflictTracked.
  *
  * Returns true if successful, false if source xact is no longer running.
  */
@@ -3374,6 +3387,10 @@ GetCurrentVirtualXIDs(TransactionId limitXmin, bool excludeXmin0,
  *
  * If dbOid is valid we skip backends attached to other databases.
  *
+ * When limitXmin is valid, mark every returned PGPROC so that it cannot be
+ * used as the source of an imported snapshot.  The caller must clear each
+ * marker after the corresponding VXID has ended.
+ *
  * Be careful to *not* pfree the result from this function. We reuse
  * this array sufficiently often that we use malloc for the result.
  */
@@ -3432,7 +3449,11 @@ GetConflictingVirtualXIDs(TransactionId limitXmin, Oid dbOid)
 
 				GET_VXID_FROM_PGPROC(vxid, *proc);
 				if (VirtualTransactionIdIsValid(vxid))
+				{
+					if (TransactionIdIsValid(limitXmin))
+						pg_atomic_write_u32(&proc->recoveryConflictTracked, 1);
 					vxids[count++] = vxid;
+				}
 			}
 		}
 	}
@@ -3444,6 +3465,24 @@ GetConflictingVirtualXIDs(TransactionId limitXmin, Oid dbOid)
 	vxids[count].localTransactionId = InvalidLocalTransactionId;
 
 	return vxids;
+}
+
+/*
+ * Stop preventing snapshot imports from the PGPROC slot associated with vxid.
+ *
+ * The tracked VXID has already ended, so the slot might now belong to another
+ * process or transaction.  Clearing the marker is nevertheless safe: the
+ * startup process is its only setter and handles one conflict wait list at a
+ * time.  A replacement process also initializes the marker to zero before
+ * entering the procarray.
+ */
+void
+ProcArrayClearRecoveryConflictTracked(VirtualTransactionId vxid)
+{
+	PGPROC	   *proc = ProcNumberGetProc(vxid.procNumber);
+
+	if (proc != NULL)
+		pg_atomic_write_u32(&proc->recoveryConflictTracked, 0);
 }
 
 /*
