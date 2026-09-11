@@ -343,6 +343,30 @@ $node_standby->psql(
 	stderr => \$stderr);
 ok($stderr =~ /timeout cannot be negative/, "get error for negative timeout");
 
+# A negative value small enough to round to zero must be rejected too, rather
+# than turning into an indefinite wait.
+$node_standby->psql(
+	'postgres',
+	"WAIT FOR LSN '${test_lsn}' WITH (timeout '-0.4ms');",
+	stderr => \$stderr);
+ok($stderr =~ /timeout cannot be negative/,
+	"get error for negative timeout that rounds to zero");
+
+# Likewise a positive value below the 1ms resolution.
+$node_standby->psql(
+	'postgres',
+	"WAIT FOR LSN '${test_lsn}' WITH (timeout '0.0001s');",
+	stderr => \$stderr);
+ok($stderr =~ /timeout value "0.0001s" is less than 1ms/,
+	"get error for sub-millisecond timeout given in seconds");
+
+$node_standby->psql(
+	'postgres',
+	"WAIT FOR LSN '${test_lsn}' WITH (timeout '0.4ms');",
+	stderr => \$stderr);
+ok($stderr =~ /timeout value "0.4ms" is less than 1ms/,
+	"get error for sub-millisecond timeout");
+
 # Test unknown parameter with WITH clause
 $node_standby->psql(
 	'postgres',
@@ -406,6 +430,17 @@ $output = $node_standby->safe_psql(
 	WAIT FOR LSN '${lsn3}' WITH (timeout 100, no_throw);]);
 ok($output eq "timeout",
 	"WAIT FOR WITH clause returns correct timeout status");
+
+# Values just above the 1ms resolution round up to a real, bounded timeout
+# rather than to zero, which would mean waiting indefinitely.
+$output = $node_standby->safe_psql(
+	'postgres', qq[
+	WAIT FOR LSN '${lsn3}' WITH (timeout '1ms', no_throw);]);
+ok($output eq "timeout", "WAIT FOR honors a 1ms timeout");
+$output = $node_standby->safe_psql(
+	'postgres', qq[
+	WAIT FOR LSN '${lsn3}' WITH (timeout '0.6ms', no_throw);]);
+ok($output eq "timeout", "WAIT FOR rounds 0.6ms up to a 1ms timeout");
 
 # Test WITH clause error case - invalid option
 $node_standby->psql(

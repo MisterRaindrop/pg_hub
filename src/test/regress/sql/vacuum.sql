@@ -402,6 +402,13 @@ VACUUM (BUFFER_USAGE_LIMIT 16777220) vac_option_tab;
 VACUUM (BUFFER_USAGE_LIMIT 120) vac_option_tab;
 -- integer overflow error
 VACUUM (BUFFER_USAGE_LIMIT 10000000000) vac_option_tab;
+-- only a value written as zero means "no ring buffer limit"; a nonzero size
+-- that rounds to zero, or a negative one, must be rejected
+VACUUM (BUFFER_USAGE_LIMIT '512B') vac_option_tab;
+VACUUM (BUFFER_USAGE_LIMIT '-512B') vac_option_tab;
+VACUUM (BUFFER_USAGE_LIMIT '513B') vac_option_tab;
+VACUUM (BUFFER_USAGE_LIMIT '127kB') vac_option_tab;
+VACUUM (BUFFER_USAGE_LIMIT '128kB') vac_option_tab;
 -- incompatible with VACUUM FULL error
 VACUUM (BUFFER_USAGE_LIMIT '512 kB', FULL) vac_option_tab;
 

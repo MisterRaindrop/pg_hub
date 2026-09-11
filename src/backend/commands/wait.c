@@ -93,6 +93,7 @@ ExecWaitStmt(ParseState *pstate, WaitStmt *stmt, bool isTopLevel,
 			char	   *timeout_str;
 			const char *hintmsg;
 			double		dval;
+			int			input_sign;
 
 			if (timeout_specified)
 				errorConflictingDefElem(defel, pstate);
@@ -100,13 +101,20 @@ ExecWaitStmt(ParseState *pstate, WaitStmt *stmt, bool isTopLevel,
 
 			timeout_str = defGetString(defel);
 
-			if (!parse_real(timeout_str, &dval, GUC_UNIT_MS, &hintmsg))
+			if (!parse_real_with_sign(timeout_str, &dval, GUC_UNIT_MS,
+									  &hintmsg, &input_sign))
 			{
 				ereport(ERROR,
 						errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						errmsg("invalid timeout value: \"%s\"", timeout_str),
 						hintmsg ? errhint("%s", _(hintmsg)) : 0);
 			}
+
+			/* Test the sign as written, since rounding can hide it */
+			if (input_sign < 0)
+				ereport(ERROR,
+						errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg("timeout cannot be negative"));
 
 			/*
 			 * Get rid of any fractional part in the input. This is so we
@@ -121,10 +129,15 @@ ExecWaitStmt(ParseState *pstate, WaitStmt *stmt, bool isTopLevel,
 						errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
 						errmsg("timeout value is out of range"));
 
-			if (dval < 0)
+			/*
+			 * Zero means to wait indefinitely, so a nonzero timeout that
+			 * rounded to zero would mean the opposite of what was asked for.
+			 */
+			if (input_sign > 0 && dval == 0)
 				ereport(ERROR,
 						errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						errmsg("timeout cannot be negative"));
+						errmsg("timeout value \"%s\" is less than 1ms",
+							   timeout_str));
 
 			timeout = (int64) dval;
 		}
