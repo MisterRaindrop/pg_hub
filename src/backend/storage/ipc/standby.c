@@ -439,12 +439,17 @@ ResolveRecoveryConflictWithVirtualXIDs(VirtualTransactionId *waitlist,
 			}
 		}
 
+		/*
+		 * The virtual transaction is gone now.  If this is a snapshot
+		 * conflict, allow snapshot imports from its PGPROC slot again before
+		 * waiting for the next transaction.
+		 */
 		if (reason == RECOVERY_CONFLICT_SNAPSHOT)
 		{
+			ProcArrayClearRecoveryConflictTracked(*waitlist);
 			INJECTION_POINT("recovery-conflict-snapshot-resolved", NULL);
 		}
 
-		/* The virtual transaction is gone now, wait for the next one */
 		waitlist++;
 	}
 
@@ -494,6 +499,14 @@ ResolveRecoveryConflictWithSnapshot(TransactionId snapshotConflictHorizon,
 		return;
 
 	Assert(TransactionIdIsNormal(snapshotConflictHorizon));
+
+	/*
+	 * Track each conflicting VXID before releasing ProcArrayLock.  Snapshot
+	 * import takes ProcArrayLock exclusively, so an import either completes
+	 * before this scan and is included in the wait list, or observes the
+	 * source's marker after the scan and fails.  Consequently, no new
+	 * conflicting VXID can appear while the fixed list is being drained.
+	 */
 	backends = GetConflictingVirtualXIDs(snapshotConflictHorizon,
 										 locator.dbOid);
 	INJECTION_POINT("recovery-conflict-snapshot-scan-complete", NULL);

@@ -505,6 +505,7 @@ InitProcess(void)
 	}
 #endif
 	pg_atomic_write_u32(&MyProc->pendingRecoveryConflicts, 0);
+	pg_atomic_write_u32(&MyProc->recoveryConflictTracked, 0);
 
 	/* Initialize fields for sync rep */
 	MyProc->waitLSN = InvalidXLogRecPtr;
@@ -705,6 +706,7 @@ InitAuxiliaryProcess(void)
 	}
 #endif
 	pg_atomic_write_u32(&MyProc->pendingRecoveryConflicts, 0);
+	pg_atomic_write_u32(&MyProc->recoveryConflictTracked, 0);
 
 	/*
 	 * Acquire ownership of the PGPROC's latch, so that we can use WaitLatch

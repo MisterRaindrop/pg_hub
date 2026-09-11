@@ -276,6 +276,18 @@ typedef struct PGPROC
 	 */
 	pg_atomic_uint32 pendingRecoveryConflicts;
 
+	/*
+	 * Set by the startup process while it waits for this process's VXID to
+	 * resolve a snapshot conflict.  A set value prevents other backends from
+	 * importing this process's snapshot and thereby creating a new conflict
+	 * that is absent from the startup process's wait list.
+	 *
+	 * The startup process is the only process that sets this field.  It
+	 * clears the field after the tracked VXID has ended.  Atomic access
+	 * permits that cleanup even if the PGPROC slot has since been recycled.
+	 */
+	pg_atomic_uint32 recoveryConflictTracked;
+
 	/************************************************************************
 	 * LWLock waiting
 	 ************************************************************************/
