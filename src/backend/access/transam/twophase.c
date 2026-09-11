@@ -1531,6 +1531,7 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 	fxid = gxact->fxid;
 	xid = XidFromFullTransactionId(fxid);
 
+	LWLockAcquire(TwoPhaseStateLock, LW_SHARED);
 	/*
 	 * Read and validate 2PC state data. State data will typically be stored
 	 * in WAL files if the LSN is after the last checkpoint record, or moved
@@ -1541,6 +1542,7 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 	else
 		XlogReadTwoPhaseData(gxact->prepare_start_lsn, &buf, NULL);
 
+	LWLockRelease(TwoPhaseStateLock);
 
 	/*
 	 * Disassemble the header area
@@ -1853,7 +1855,7 @@ CheckPointTwoPhase(XLogRecPtr redo_horizon)
 	 * prepare_end_lsn set prior to the last checkpoint yet is marked invalid,
 	 * because of the efforts with delayChkptFlags.
 	 */
-	LWLockAcquire(TwoPhaseStateLock, LW_SHARED);
+	LWLockAcquire(TwoPhaseStateLock, LW_EXCLUSIVE);
 	for (i = 0; i < TwoPhaseState->numPrepXacts; i++)
 	{
 		/*
