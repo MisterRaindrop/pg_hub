@@ -253,3 +253,33 @@ SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test_idx3'::regclass;
  {fillfactor=40}
 (1 row)
 
+-- Reloptions are parsed by the same code, so a negative value that rounds to
+-- zero must not pass a non-negative minimum either
+CREATE TABLE reloptions_test3 (i INT) WITH (parallel_workers = -1);
+ERROR:  value -1 out of bounds for option "parallel_workers"
+DETAIL:  Valid values are between "0" and "1024".
+CREATE TABLE reloptions_test3 (i INT) WITH (parallel_workers = -0.4);
+ERROR:  value -0.4 out of bounds for option "parallel_workers"
+DETAIL:  Valid values are between "0" and "1024".
+CREATE TABLE reloptions_test3 (i INT) WITH (parallel_workers = 0);
+SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test3'::regclass;
+      reloptions      
+----------------------
+ {parallel_workers=0}
+(1 row)
+
+ALTER TABLE reloptions_test3 SET (parallel_workers = 0.4);
+SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test3'::regclass;
+       reloptions       
+------------------------
+ {parallel_workers=0.4}
+(1 row)
+
+ALTER TABLE reloptions_test3 SET (parallel_workers = 0.6);
+SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test3'::regclass;
+       reloptions       
+------------------------
+ {parallel_workers=0.6}
+(1 row)
+
+DROP TABLE reloptions_test3;

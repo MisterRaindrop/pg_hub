@@ -399,3 +399,35 @@ SELECT name FROM tab_settings_flags
   WHERE no_reset AND NOT no_reset_all
   ORDER BY 1;
 DROP TABLE tab_settings_flags;
+
+-- Rounding must not hide the sign of the value.  A negative quantity that
+-- rounds to zero is still negative, so a parameter that excludes negative
+-- values must reject it.  Positive values that round to zero are unaffected.
+SET statement_timeout = '-1ms';
+SET statement_timeout = '-0.5ms';
+SET statement_timeout = '-0.0005s';
+SET statement_timeout = '0';
+SHOW statement_timeout;
+SET statement_timeout = '-0';
+SHOW statement_timeout;
+SET statement_timeout = '0.4ms';
+SHOW statement_timeout;
+RESET statement_timeout;
+-- negative values are still accepted where the minimum is negative
+SET log_min_duration_statement = '-0.4ms';
+SHOW log_min_duration_statement;
+RESET log_min_duration_statement;
+-- positive values still round up into an above-zero minimum
+SET deadlock_timeout = '0.6ms';
+SHOW deadlock_timeout;
+RESET deadlock_timeout;
+-- values that round to something nonzero are unaffected
+SET work_mem = '1.1GB';
+SHOW work_mem;
+RESET work_mem;
+-- likewise for a real-valued parameter
+SET vacuum_cost_delay = '-0.4ms';
+SET vacuum_cost_delay = '-0.0004s';
+SET vacuum_cost_delay = '0.4ms';
+SHOW vacuum_cost_delay;
+RESET vacuum_cost_delay;
