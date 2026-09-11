@@ -707,6 +707,29 @@ SELECT t1.ctid, t1, t2, t1.c1 FROM ft1 t1 JOIN ft2 t2 ON (t1.c1 = t2.c1) ORDER B
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT t1.c1 FROM ft1 t1 WHERE EXISTS (SELECT 1 FROM ft2 t2 WHERE t1.c1 = t2.c1) ORDER BY t1.c1 OFFSET 100 LIMIT 10;
 SELECT t1.c1 FROM ft1 t1 WHERE EXISTS (SELECT 1 FROM ft2 t2 WHERE t1.c1 = t2.c1) ORDER BY t1.c1 OFFSET 100 LIMIT 10;
+-- SEMI join costing should use the outer relation's row count, rather than
+-- the size of the cross product, when costing quals applied after the join.
+CREATE TABLE semi_tbl1 (a int, b int);
+CREATE TABLE semi_tbl2 (a int);
+INSERT INTO semi_tbl1 SELECT i, i FROM generate_series(1, 15000) i;
+INSERT INTO semi_tbl2 SELECT i FROM generate_series(1, 15000) i;
+ANALYZE semi_tbl1;
+ANALYZE semi_tbl2;
+CREATE FOREIGN TABLE semi_ft1 (a int, b int) SERVER loopback
+  OPTIONS (table_name 'semi_tbl1');
+CREATE FOREIGN TABLE semi_ft2 (a int) SERVER loopback
+  OPTIONS (table_name 'semi_tbl2');
+ANALYZE semi_ft1;
+ANALYZE semi_ft2;
+-- Don't let the generic cross-product join-clause cost obscure this test.
+SET cpu_operator_cost TO 0.000001;
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT t1.a FROM semi_ft1 t1
+WHERE postgres_fdw_abs(t1.b) > -1
+  AND EXISTS (SELECT 1 FROM semi_ft2 t2 WHERE t1.a = t2.a);
+RESET cpu_operator_cost;
+DROP FOREIGN TABLE semi_ft1, semi_ft2;
+DROP TABLE semi_tbl1, semi_tbl2;
 -- ANTI JOIN, not pushed down
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT t1.c1 FROM ft1 t1 WHERE NOT EXISTS (SELECT 1 FROM ft2 t2 WHERE t1.c1 = t2.c2) ORDER BY t1.c1 OFFSET 100 LIMIT 10;

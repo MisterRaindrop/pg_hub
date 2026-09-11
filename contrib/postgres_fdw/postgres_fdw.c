@@ -3640,7 +3640,17 @@ estimate_path_cost_size(PlannerInfo *root,
 			run_cost = fpinfo_i->rel_total_cost - fpinfo_i->rel_startup_cost;
 			run_cost += fpinfo_o->rel_total_cost - fpinfo_o->rel_startup_cost;
 			run_cost += nrows * join_cost.per_tuple;
-			nrows = clamp_row_est(nrows * fpinfo->joinclause_sel);
+
+			/*
+			 * For a semi-join, joinclause_sel is the fraction of outer
+			 * relation rows that have matches in the inner relation, rather
+			 * than the selectivity of the cross product.
+			 */
+			if (fpinfo->jointype == JOIN_SEMI)
+				nrows = fpinfo_o->rows * fpinfo->joinclause_sel;
+			else
+				nrows *= fpinfo->joinclause_sel;
+			nrows = clamp_row_est(nrows);
 			run_cost += nrows * remote_conds_cost.per_tuple;
 			run_cost += fpinfo->local_conds_cost.per_tuple * retrieved_rows;
 
