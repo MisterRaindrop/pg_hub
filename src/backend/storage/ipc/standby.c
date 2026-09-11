@@ -439,6 +439,11 @@ ResolveRecoveryConflictWithVirtualXIDs(VirtualTransactionId *waitlist,
 			}
 		}
 
+		if (reason == RECOVERY_CONFLICT_SNAPSHOT)
+		{
+			INJECTION_POINT("recovery-conflict-snapshot-resolved", NULL);
+		}
+
 		/* The virtual transaction is gone now, wait for the next one */
 		waitlist++;
 	}
@@ -491,6 +496,7 @@ ResolveRecoveryConflictWithSnapshot(TransactionId snapshotConflictHorizon,
 	Assert(TransactionIdIsNormal(snapshotConflictHorizon));
 	backends = GetConflictingVirtualXIDs(snapshotConflictHorizon,
 										 locator.dbOid);
+	INJECTION_POINT("recovery-conflict-snapshot-scan-complete", NULL);
 	ResolveRecoveryConflictWithVirtualXIDs(backends,
 										   RECOVERY_CONFLICT_SNAPSHOT,
 										   WAIT_EVENT_RECOVERY_CONFLICT_SNAPSHOT,
