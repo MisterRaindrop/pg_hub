@@ -3002,7 +3002,7 @@ AddRelationNotNullConstraints(Relation rel, List *constraints,
 			{
 				if (other->is_no_inherit != constr->is_no_inherit)
 					ereport(ERROR,
-							errcode(ERRCODE_SYNTAX_ERROR),
+							errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 							errmsg("conflicting NO INHERIT declaration for not-null constraint on column \"%s\"",
 								   strVal(linitial(constr->keys))));
 
@@ -3016,7 +3016,7 @@ AddRelationNotNullConstraints(Relation rel, List *constraints,
 						constr->conname = pstrdup(other->conname);
 					else if (strcmp(constr->conname, other->conname) != 0)
 						ereport(ERROR,
-								errcode(ERRCODE_SYNTAX_ERROR),
+								errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 								errmsg("conflicting not-null constraint names \"%s\" and \"%s\"",
 									   constr->conname, other->conname));
 				}
