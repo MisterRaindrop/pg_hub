@@ -738,7 +738,7 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 			case CONSTR_NULL:
 				if ((saw_nullable && column->is_not_null) || need_notnull)
 					ereport(ERROR,
-							(errcode(ERRCODE_SYNTAX_ERROR),
+							(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 							 errmsg("conflicting NULL/NOT NULL declarations for column \"%s\" of table \"%s\"",
 									column->colname, cxt->relation->relname),
 							 parser_errposition(cxt->pstate,
@@ -756,7 +756,7 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 				/* Disallow conflicting [NOT] NULL markings */
 				if (saw_nullable && !column->is_not_null)
 					ereport(ERROR,
-							(errcode(ERRCODE_SYNTAX_ERROR),
+							(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 							 errmsg("conflicting NULL/NOT NULL declarations for column \"%s\" of table \"%s\"",
 									column->colname, cxt->relation->relname),
 							 parser_errposition(cxt->pstate,
@@ -764,7 +764,7 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 
 				if (disallow_noinherit_notnull && constraint->is_no_inherit)
 					ereport(ERROR,
-							errcode(ERRCODE_SYNTAX_ERROR),
+							errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 							errmsg("conflicting NO INHERIT declarations for not-null constraints on column \"%s\"",
 								   column->colname));
 
@@ -794,12 +794,14 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 					if (constraint->conname &&
 						notnull_constraint->conname &&
 						strcmp(notnull_constraint->conname, constraint->conname) != 0)
-						elog(ERROR, "conflicting not-null constraint names \"%s\" and \"%s\"",
-							 notnull_constraint->conname, constraint->conname);
+						ereport(ERROR,
+								errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+								errmsg("conflicting not-null constraint names \"%s\" and \"%s\"",
+									   notnull_constraint->conname, constraint->conname));
 
 					if (notnull_constraint->is_no_inherit != constraint->is_no_inherit)
 						ereport(ERROR,
-								errcode(ERRCODE_SYNTAX_ERROR),
+								errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 								errmsg("conflicting NO INHERIT declarations for not-null constraints on column \"%s\"",
 									   column->colname));
 
@@ -812,7 +814,7 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 			case CONSTR_DEFAULT:
 				if (saw_default)
 					ereport(ERROR,
-							(errcode(ERRCODE_SYNTAX_ERROR),
+							(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 							 errmsg("multiple default values specified for column \"%s\" of table \"%s\"",
 									column->colname, cxt->relation->relname),
 							 parser_errposition(cxt->pstate,
@@ -842,7 +844,7 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 
 					if (saw_identity)
 						ereport(ERROR,
-								(errcode(ERRCODE_SYNTAX_ERROR),
+								(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 								 errmsg("multiple identity specifications for column \"%s\" of table \"%s\"",
 										column->colname, cxt->relation->relname),
 								 parser_errposition(cxt->pstate,
@@ -864,7 +866,7 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 						need_notnull = true;
 					else if (!column->is_not_null)
 						ereport(ERROR,
-								(errcode(ERRCODE_SYNTAX_ERROR),
+								(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 								 errmsg("conflicting NULL/NOT NULL declarations for column \"%s\" of table \"%s\"",
 										column->colname, cxt->relation->relname),
 								 parser_errposition(cxt->pstate,
@@ -879,7 +881,7 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 							 errmsg("generated columns are not supported on typed tables")));
 				if (saw_generated)
 					ereport(ERROR,
-							(errcode(ERRCODE_SYNTAX_ERROR),
+							(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 							 errmsg("multiple generation clauses specified for column \"%s\" of table \"%s\"",
 									column->colname, cxt->relation->relname),
 							 parser_errposition(cxt->pstate,
@@ -897,7 +899,7 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 			case CONSTR_PRIMARY:
 				if (saw_nullable && !column->is_not_null)
 					ereport(ERROR,
-							(errcode(ERRCODE_SYNTAX_ERROR),
+							(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 							 errmsg("conflicting NULL/NOT NULL declarations for column \"%s\" of table \"%s\"",
 									column->colname, cxt->relation->relname),
 							 parser_errposition(cxt->pstate,
@@ -962,7 +964,7 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 
 		if (saw_default && saw_identity)
 			ereport(ERROR,
-					(errcode(ERRCODE_SYNTAX_ERROR),
+					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 					 errmsg("both default and identity specified for column \"%s\" of table \"%s\"",
 							column->colname, cxt->relation->relname),
 					 parser_errposition(cxt->pstate,
@@ -970,7 +972,7 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 
 		if (saw_default && saw_generated)
 			ereport(ERROR,
-					(errcode(ERRCODE_SYNTAX_ERROR),
+					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 					 errmsg("both default and generation expression specified for column \"%s\" of table \"%s\"",
 							column->colname, cxt->relation->relname),
 					 parser_errposition(cxt->pstate,
@@ -978,7 +980,7 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 
 		if (saw_identity && saw_generated)
 			ereport(ERROR,
-					(errcode(ERRCODE_SYNTAX_ERROR),
+					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 					 errmsg("both identity and generation expression specified for column \"%s\" of table \"%s\"",
 							column->colname, cxt->relation->relname),
 					 parser_errposition(cxt->pstate,
